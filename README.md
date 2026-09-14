@@ -75,7 +75,7 @@ python -m pytest tests/
 
 ## Estado
 
-Prueba de concepto funcional. Pendiente: sandboxing fuerte por agente (bwrap/landlock), daemon multi-máquina, notificaciones. Pensado para ejecutarse en localhost o detrás de un túnel SSH — no expongas el server directamente a internet.
+Prueba de concepto funcional. El camino completo hacia un producto de nivel Raft está analizado y priorizado en [`BACKLOG.md`](BACKLOG.md). Pensado para ejecutarse en localhost o detrás de un túnel SSH — no expongas el server directamente a internet.
 
 ## Licencia
 

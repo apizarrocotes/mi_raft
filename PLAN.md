@@ -1,9 +1,9 @@
 # PLAN — mi_raft
 
 ## Current State
-- **Activo ahora**: memoria completa para agentes dinámicos ✅ (2026-09-14): auto memory_file en POST /agents, ver/editar por API y UI.
+- **Activo ahora**: backlog generado (BACKLOG.md) — análisis de brechas vs Raft/multica priorizado.
 - **Bloqueado**: nada.
-- **Siguiente paso**: push pendiente de confirmación del usuario; luego uso real. Candidatos: editar agentes (instructions/model) desde la UI, notificaciones, sandboxing fuerte.
+- **Siguiente paso**: elegir sprint del roadmap de BACKLOG.md (sugerido: sprint 1 con quick wins: costes, estados de agente, markdown, edición de agentes, CI).
 
 ## F0 — Investigación ✅ (2026-09-14)
 - [x] Referencias estudiadas (multica, raft-external-agents, omnigent); headless de los 3 CLIs verificado.
