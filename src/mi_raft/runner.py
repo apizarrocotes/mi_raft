@@ -31,8 +31,10 @@ async def runner_loop(db: Database, poll_s: float = 0.5) -> None:
 
 async def execute_run(db: Database, run) -> None:
     agent = db.get_agent(run["agent_id"])
+    db.set_agent_status(agent.name, "working")
     if agent.runtime == "external":
         await execute_external_run(db, run, agent)
+        db.set_agent_status(agent.name, "idle")
         return
     runtime = get_runtime(agent.runtime)
     session_id = db.last_session_for(agent.name, run["thread_id"])
@@ -40,17 +42,13 @@ async def execute_run(db: Database, run) -> None:
     try:
         result = await runtime.run_turn(agent, prompt, session_id, agent.timeout_s)
     except Exception as exc:
-        db.finish_run(run["id"], "failed", None, None, None, str(exc))
-        db.insert_message(
-            run["channel_id"],
-            "system",
-            "mi_raft",
-            f"el agente {agent.name} falló: {exc}",
-            thread_id=run["thread_id"],
-            msg_type="status",
-        )
+        _fail_run(db, run, agent, str(exc))
         return
-    db.finish_run(run["id"], "done", result.session_id, agent.work_dir, result.text, None)
+    db.finish_run(
+        run["id"], "done", result.session_id, agent.work_dir, result.text, None,
+        cost_usd=result.cost_usd, tokens_in=result.tokens_in, tokens_out=result.tokens_out,
+    )
+    db.set_agent_status(agent.name, "idle")
     reply_id = db.insert_message(
         run["channel_id"], "agent", agent.name, result.text, thread_id=run["thread_id"]
     )
@@ -97,6 +95,7 @@ async def execute_external_run(db: Database, run, agent) -> None:
 
 
 def _fail_run(db: Database, run, agent, error: str) -> None:
+    db.set_agent_status(agent.name, "error")
     db.finish_run(run["id"], "failed", None, None, None, error)
     db.insert_message(
         run["channel_id"],

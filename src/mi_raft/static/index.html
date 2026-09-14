@@ -34,6 +34,9 @@
   .side-item .rt { color: var(--muted); font-size: 11px; margin-left: 6px; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
   .dot.on { background: var(--ok); }
+  .dot.working { background: var(--accent2); animation: pulse 1.2s infinite; }
+  .dot.error { background: var(--danger); }
+  @keyframes pulse { 50% { opacity: .4; } }
   main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   header {
     display: flex; align-items: center; gap: 8px; padding: 10px 16px;
@@ -65,6 +68,15 @@
   .tid { color: var(--muted); font-size: 11px; cursor: pointer; }
   .tid:hover { color: var(--accent); }
   .text { white-space: pre-wrap; word-break: break-word; }
+  .md p { margin: 0 0 6px; } .md p:last-child { margin-bottom: 0; }
+  .md pre { background: #0b1016; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; overflow-x: auto; font-size: 12.5px; margin: 6px 0; }
+  .md code { background: #0b1016; border-radius: 4px; padding: 1px 5px; font-size: 12.5px; font-family: ui-monospace, monospace; }
+  .md pre code { background: none; padding: 0; }
+  .md table { border-collapse: collapse; margin: 6px 0; } .md th, .md td { border: 1px solid var(--border); padding: 4px 8px; }
+  .md ul, .md ol { margin: 4px 0 6px 20px; }
+  .md h1, .md h2, .md h3 { font-size: 14px; margin: 8px 0 4px; }
+  .md blockquote { border-left: 3px solid var(--border); margin: 6px 0; padding: 2px 10px; color: var(--muted); }
+  .md a { color: var(--accent); }
   .msg.system .text { color: var(--muted); font-style: italic; }
   #composer { border-top: 1px solid var(--border); padding: 10px 16px; background: var(--panel); position: relative; }
   #replychip {
@@ -183,6 +195,8 @@
   <input id="keyinput" placeholder="API key" type="password">
   <button class="btn" id="keysave">Guardar</button>
 </div></div>
+<script src="/vendor/marked.min.js"></script>
+<script src="/vendor/purify.min.js"></script>
 
 <script>
 const S = {
@@ -194,6 +208,14 @@ const S = {
 };
 const $ = (id) => document.getElementById(id);
 const esc = (s) => (s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const mdAvailable = typeof marked !== "undefined" && typeof DOMPurify !== "undefined";
+function renderText(m) {
+  if (m.author_type === "system") return `<div class="text">${esc(m.text)}</div>`;
+  if (!mdAvailable) return `<div class="text">${esc(m.text)}</div>`;
+  marked.setOptions({ breaks: true, gfm: true });
+  const html = DOMPurify.sanitize(marked.parse(m.text || ""));
+  return `<div class="text md">${html}</div>`;
+}
 
 async function api(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
@@ -237,9 +259,10 @@ function render() {
         <div class="meta">
           <span class="author ${authorColor(m)}">${esc(m.author_id)}</span>
           <span class="time">${(m.created_at || "").slice(11, 16)}</span>
-          ${!reply ? `<span class="tid" data-tid="${m.id}">hilo #${m.id} · responder</span>` : ""}
+          ${!reply ? `<span class="tid" data-tid="${m.id}">hilo #${m.id} · responder</span>
+          <span class="tid" data-totask="${m.id}">→task</span>` : ""}
         </div>
-        <div class="text">${esc(m.text)}</div>
+        ${renderText(m)}
       </div>`;
     return div;
   };
@@ -264,7 +287,8 @@ function renderAgents() {
   $("agents").replaceChildren(...S.agents.map(a => {
     const d = document.createElement("div");
     d.className = "side-item";
-    d.innerHTML = `<span class="dot on"></span>${esc(a.id)}<span class="rt">${esc(a.runtime)}</span>`;
+    const dotClass = a.status === "working" ? "working" : a.status === "error" ? "error" : "on";
+    d.innerHTML = `<span class="dot ${dotClass}"></span>${esc(a.id)}<span class="rt">${esc(a.runtime)}</span>`;
     return d;
   }));
 }
@@ -300,6 +324,8 @@ function openSSE() {
     S.seen.add(m.id);
     S.lastId = Math.max(S.lastId, m.id);
     if (m.channel_id === S.channel) { S.messages.push(m); render(); }
+    maybeRefreshAgents();
+    notifyIfNeeded(m);
     refreshHealth(true);
   });
   es.onerror = () => refreshHealth(false);
@@ -309,6 +335,16 @@ function openSSE() {
 async function refreshHealth(ok) {
   $("health-dot").className = "dot" + (ok ? " on" : "");
   $("health-text").textContent = ok ? "conectado" : "reconectando…";
+}
+
+let agentsRefreshing = false;
+function maybeRefreshAgents() {
+  if (agentsRefreshing) return;
+  agentsRefreshing = true;
+  setTimeout(async () => {
+    try { S.agents = await api("/agents"); renderAgents(); } catch (e) {}
+    agentsRefreshing = false;
+  }, 2000);
 }
 
 async function send() {
@@ -337,7 +373,13 @@ function clearReply() { S.replyThread = null; $("replychip").style.display = "no
 $("replytid").onclick = clearReply;
 $("view").addEventListener("click", (e) => {
   const tid = e.target.dataset?.tid;
-  if (tid) setReply(Number(tid));
+  if (tid) { setReply(Number(tid)); return; }
+  const toTask = e.target.dataset?.totask;
+  if (toTask) {
+    api("/tasks/from-message", { method: "POST", body: JSON.stringify({ message_id: Number(toTask) }) })
+      .then(r => { e.target.textContent = "→task #" + r.id; e.target.style.color = "var(--accent2)"; })
+      .catch(err => { if (err.message !== "401") alert(err.message); });
+  }
 });
 
 function hideMentions() { $("mentions").style.display = "none"; }
@@ -410,9 +452,15 @@ async function renderTeam() {
   const graph = orgSVG(org);
   view.innerHTML = `
     <div class="team-grid">
-      <div class="cardbox">
-        <h3>Organigrama (handoffs permitidos)</h3>
-        ${graph}
+      <div>
+        <div class="cardbox">
+          <h3>Organigrama (handoffs permitidos)</h3>
+          ${graph}
+        </div>
+        <div class="cardbox" style="margin-top:16px" id="usage-box">
+          <h3>Costes y tokens (runs completados)</h3>
+          <div style="color:var(--muted)">cargando…</div>
+        </div>
       </div>
       <div class="cardbox" id="team-right">
         <h3>Dar de alta un agente</h3>
@@ -422,15 +470,16 @@ async function renderTeam() {
         <div style="color:var(--muted);font-size:11px;margin-bottom:8px" id="ag-workdir"></div>
         <button class="btn" id="ag-create">Crear agente</button>
         <div style="margin-top:14px">
-          <h3 style="margin-top:8px">Agentes del equipo <span style="font-weight:400;text-transform:none">(clic para su memoria)</span></h3>
+          <h3 style="margin-top:8px">Agentes del equipo <span style="font-weight:400;text-transform:none">(clic para memoria y ajustes)</span></h3>
           ${agents.map(a => `
             <div class="agent-row" data-agent="${esc(a.id)}" style="cursor:pointer">
               <span><b>${esc(a.id)}</b> <span class="rt">${esc(a.runtime)}</span></span>
-              <span class="rt">${a.memory_file ? "🧠" : "—"}</span>
+              <span class="rt">${a.memory_file ? "🧠 " : ""}${a.status === "working" ? "⚙️" : a.status === "error" ? "❌" : ""}</span>
             </div>`).join("")}
         </div>
       </div>
     </div>`;
+  loadUsage();
   $("ag-workdir").textContent = S.workspace
     ? "work_dir por defecto: " + S.workspace
     : "sin workspace por defecto en raft.yaml";
@@ -453,23 +502,62 @@ async function renderTeam() {
   });
 }
 
+async function loadUsage() {
+  const box = $("usage-box");
+  if (!box) return;
+  const usage = await api("/usage").catch(() => []);
+  const rows = usage.map(u => `
+    <tr><td>${esc(u.agent_id)}</td><td>${u.runs}</td>
+    <td>${u.tokens_in ?? 0} / ${u.tokens_out ?? 0}</td>
+    <td>$${(u.cost_usd ?? 0).toFixed(4)}</td></tr>`).join("");
+  box.innerHTML = `
+    <h3>Costes y tokens (runs completados)</h3>
+    ${rows ? `<table><tr><th>agente</th><th>runs</th><th>tokens in/out</th><th>coste</th></tr>${rows}</table>`
+           : '<div style="color:var(--muted)">sin datos aún</div>'}`;
+}
+
 async function showMemory(agentId) {
-  const mem = await api(`/agents/${encodeURIComponent(agentId)}/memory`);
+  const [mem, agents] = await Promise.all([
+    api(`/agents/${encodeURIComponent(agentId)}/memory`),
+    api("/agents"),
+  ]);
+  const agent = agents.find(a => a.id === agentId) || {};
   const right = $("team-right");
   if (!right) return;
   right.innerHTML = `
-    <h3>Memoria de ${esc(agentId)}</h3>
+    <h3>${esc(agentId)} — memoria y ajustes</h3>
     <div style="color:var(--muted);font-size:11px;margin-bottom:8px">${esc(mem.memory_file || "sin fichero de memoria — se creará al guardar")}</div>
-    <textarea id="mem-editor" style="min-height:200px;font-family:ui-monospace,monospace">${esc(mem.content ?? "")}</textarea>
-    <div style="display:flex;gap:8px;margin-top:8px">
-      <button class="btn" id="mem-save">Guardar</button>
+    <textarea id="mem-editor" style="min-height:160px;font-family:ui-monospace,monospace">${esc(mem.content ?? "")}</textarea>
+    <div style="display:flex;gap:8px;margin:8px 0">
+      <button class="btn" id="mem-save">Guardar memoria</button>
       <button class="btn ghost" id="mem-back">Volver</button>
-    </div>`;
+    </div>
+    <h3 style="margin-top:10px">Ajustes del agente</h3>
+    <textarea id="ag-ed-instructions" placeholder="instrucciones…">${esc(agent.instructions || "")}</textarea>
+    <input id="ag-ed-model" placeholder="modelo (opcional)" value="${esc(agent.model || "")}">
+    <input id="ag-ed-mode" placeholder="permisos: mode (ej. auto/dontAsk)" value="${esc(agent.permissions?.mode || "")}">
+    <button class="btn" id="ag-ed-save">Guardar ajustes</button>`;
   $("mem-save").onclick = async () => {
     try {
       await api(`/agents/${encodeURIComponent(agentId)}/memory`, {
         method: "PUT",
         body: JSON.stringify({ content: $("mem-editor").value }),
+      });
+      renderTeam(); renderAgents();
+    } catch (e) { if (e.message !== "401") alert(e.message); }
+  };
+  $("ag-ed-save").onclick = async () => {
+    const perms = { ...(agent.permissions || {}) };
+    const mode = $("ag-ed-mode").value.trim();
+    if (mode) perms.mode = mode; else delete perms.mode;
+    try {
+      await api(`/agents/${encodeURIComponent(agentId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          instructions: $("ag-ed-instructions").value,
+          model: $("ag-ed-model").value.trim() || null,
+          permissions: perms,
+        }),
       });
       renderTeam(); renderAgents();
     } catch (e) { if (e.message !== "401") alert(e.message); }

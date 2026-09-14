@@ -22,6 +22,7 @@ class OpencodeRuntime(BaseRuntime):
         events = parse_json_lines(stdout)
         texts: list[str] = []
         session_id = None
+        cost_usd = tokens_in = tokens_out = None
         for ev in events:
             if session_id is None:
                 session_id = find_first(ev, "sessionID")
@@ -31,10 +32,22 @@ class OpencodeRuntime(BaseRuntime):
                     texts.append(part["text"])
                 elif isinstance(ev.get("text"), str):
                     texts.append(ev["text"])
+            if ev.get("type") == "step_finish" or ev.get("type") == "step-finish":
+                part = ev.get("part") or {}
+                tokens = part.get("tokens") or {}
+                if isinstance(tokens.get("input"), (int, float)):
+                    tokens_in = int(tokens["input"])
+                if isinstance(tokens.get("output"), (int, float)):
+                    tokens_out = int(tokens["output"])
+                if isinstance(part.get("cost"), (int, float)):
+                    cost_usd = float(part["cost"])
         text = "\n\n".join(t for t in texts if t.strip()).strip()
         if not text:
             raise RuntimeError(f"opencode no devolvió texto: {stdout[:500]}")
-        return RunResult(session_id=session_id, text=text)
+        return RunResult(
+            session_id=session_id, text=text,
+            cost_usd=cost_usd, tokens_in=tokens_in, tokens_out=tokens_out,
+        )
 
 
 def register(registry: dict) -> None:

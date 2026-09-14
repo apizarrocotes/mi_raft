@@ -14,6 +14,8 @@ class ClaudeRuntime(BaseRuntime):
         args += ["--permission-mode", str(mode)]
         if agent.model:
             args += ["--model", str(agent.model)]
+        if agent.budget_usd:
+            args += ["--max-budget-usd", str(agent.budget_usd)]
         if session_id:
             args += ["--resume", session_id]
         args += agent.extra_args
@@ -27,7 +29,14 @@ class ClaudeRuntime(BaseRuntime):
         text = obj.get("result")
         if not isinstance(text, str):
             raise RuntimeError(f"claude no devolvió 'result': {str(obj)[:500]}")
-        return RunResult(session_id=obj.get("session_id"), text=text)
+        usage = obj.get("usage") or {}
+        return RunResult(
+            session_id=obj.get("session_id"),
+            text=text,
+            cost_usd=obj.get("total_cost_usd"),
+            tokens_in=usage.get("input_tokens"),
+            tokens_out=usage.get("output_tokens"),
+        )
 
 
 def register(registry: dict) -> None:

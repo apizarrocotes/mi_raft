@@ -85,13 +85,17 @@ CREATE INDEX IF NOT EXISTS idx_task_status ON task(status, id);
 
 AGENT_COLUMNS = (
     "id, runtime, work_dir, instructions, model, permissions_json, "
-    "extra_args_json, max_concurrent, timeout_s, memory_file, server_port, wake_url"
+    "extra_args_json, max_concurrent, timeout_s, memory_file, server_port, wake_url, budget_usd"
 )
 
 MIGRATIONS = (
     "ALTER TABLE agent ADD COLUMN memory_file TEXT",
     "ALTER TABLE agent ADD COLUMN server_port INTEGER",
     "ALTER TABLE agent ADD COLUMN wake_url TEXT",
+    "ALTER TABLE agent ADD COLUMN budget_usd REAL",
+    "ALTER TABLE run ADD COLUMN cost_usd REAL",
+    "ALTER TABLE run ADD COLUMN tokens_in INTEGER",
+    "ALTER TABLE run ADD COLUMN tokens_out INTEGER",
 )
 
 
@@ -149,7 +153,7 @@ class Database:
     @staticmethod
     def _upsert_agent(conn: sqlite3.Connection, a: AgentConfig) -> None:
         conn.execute(
-            f"INSERT OR REPLACE INTO agent ({AGENT_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT OR REPLACE INTO agent ({AGENT_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 a.name,
                 a.runtime,
@@ -163,6 +167,7 @@ class Database:
                 a.memory_file,
                 a.server_port,
                 a.wake_url,
+                a.budget_usd,
             ),
         )
 
@@ -237,6 +242,7 @@ class Database:
             memory_file=row["memory_file"],
             server_port=row["server_port"],
             wake_url=row["wake_url"],
+            budget_usd=row["budget_usd"],
         )
 
     def list_agents(self) -> list[sqlite3.Row]:
@@ -378,13 +384,37 @@ class Database:
         work_dir: str | None,
         result_text: str | None,
         error: str | None,
+        cost_usd: float | None = None,
+        tokens_in: int | None = None,
+        tokens_out: int | None = None,
     ) -> None:
         with self.tx() as conn:
             conn.execute(
                 "UPDATE run SET status=?, session_id=?, work_dir=?, result_text=?,"
-                " error=?, finished_at=datetime('now') WHERE id=?",
-                (status, session_id, work_dir, result_text, error, run_id),
+                " error=?, cost_usd=?, tokens_in=?, tokens_out=?, finished_at=datetime('now')"
+                " WHERE id=?",
+                (status, session_id, work_dir, result_text, error, cost_usd, tokens_in, tokens_out, run_id),
             )
+
+    def set_agent_status(self, agent_id: str, status: str) -> None:
+        with self.tx() as conn:
+            conn.execute("UPDATE agent SET status=? WHERE id=?", (status, agent_id))
+
+    def usage_by_agent(self) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT agent_id, COUNT(*) AS runs, SUM(cost_usd) AS cost_usd,"
+            " SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out"
+            " FROM run WHERE status='done' GROUP BY agent_id ORDER BY cost_usd DESC"
+        ).fetchall()
+
+    def usage_by_day(self) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT substr(started_at, 1, 10) AS day, COUNT(*) AS runs,"
+            " SUM(cost_usd) AS cost_usd, SUM(tokens_in) AS tokens_in,"
+            " SUM(tokens_out) AS tokens_out"
+            " FROM run WHERE status='done' AND started_at IS NOT NULL"
+            " GROUP BY day ORDER BY day DESC LIMIT 30"
+        ).fetchall()
 
     def last_session_for(self, agent_id: str, thread_id: int) -> str | None:
         row = self.conn.execute(

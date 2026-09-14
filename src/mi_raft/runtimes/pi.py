@@ -31,6 +31,7 @@ class PiRuntime(BaseRuntime):
                     break
 
         answer = None
+        cost_usd = tokens_in = tokens_out = None
         for ev in events:
             if ev.get("type") != "message_end":
                 continue
@@ -45,9 +46,25 @@ class PiRuntime(BaseRuntime):
             ]
             if texts:
                 answer = "\n".join(texts)
+            usage = msg.get("usage") or {}
+            for k_in in ("input_tokens", "input", "prompt_tokens"):
+                if isinstance(usage.get(k_in), (int, float)):
+                    tokens_in = int(usage[k_in])
+                    break
+            for k_out in ("output_tokens", "output", "completion_tokens"):
+                if isinstance(usage.get(k_out), (int, float)):
+                    tokens_out = int(usage[k_out])
+                    break
+            if isinstance(msg.get("cost"), (int, float)):
+                cost_usd = float(msg["cost"])
+            elif isinstance(usage.get("cost"), (int, float)):
+                cost_usd = float(usage["cost"])
         if not answer:
             raise RuntimeError(f"pi no devolvió respuesta de asistente: {stdout[:500]}")
-        return RunResult(session_id=session_id, text=answer)
+        return RunResult(
+            session_id=session_id, text=answer,
+            cost_usd=cost_usd, tokens_in=tokens_in, tokens_out=tokens_out,
+        )
 
 
 def register(registry: dict) -> None:

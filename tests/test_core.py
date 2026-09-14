@@ -690,3 +690,136 @@ class TestMemoryApi:
         )
         assert r.json()["memory_file"] == str(tmp_path / "mem.md")
         assert (tmp_path / "mem.md").exists()
+
+
+class TestUsage:
+    def test_claude_parse_costs(self):
+        from mi_raft.runtimes.claude import ClaudeRuntime
+
+        out = json.dumps({
+            "result": "hecho", "session_id": "s1", "total_cost_usd": 0.0123,
+            "usage": {"input_tokens": 120, "output_tokens": 45},
+        })
+        r = ClaudeRuntime().parse_output(out)
+        assert r.cost_usd == 0.0123
+        assert r.tokens_in == 120 and r.tokens_out == 45
+
+    def test_opencode_parse_costs(self):
+        from mi_raft.runtimes.opencode import OpencodeRuntime
+
+        lines = "\n".join([
+            json.dumps({"type": "text", "sessionID": "ses1", "part": {"text": "listo"}}),
+            json.dumps({"type": "step_finish", "sessionID": "ses1",
+                        "part": {"tokens": {"input": 300, "output": 20}, "cost": 0.004}}),
+        ])
+        r = OpencodeRuntime().parse_output(lines)
+        assert r.tokens_in == 300 and r.tokens_out == 20 and r.cost_usd == 0.004
+
+    def test_pi_parse_costs(self):
+        from mi_raft.runtimes.pi import PiRuntime
+
+        lines = "\n".join([
+            json.dumps({"type": "session", "session": {"id": "pi1"}}),
+            json.dumps({"type": "message_end", "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "ok"}],
+                "usage": {"input_tokens": 900, "output_tokens": 10},
+                "cost": 0.002,
+            }}),
+        ])
+        r = PiRuntime().parse_output(lines)
+        assert r.session_id == "pi1"
+        assert r.tokens_in == 900 and r.tokens_out == 10 and r.cost_usd == 0.002
+
+    def test_usage_endpoint(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from mi_raft.server import create_app
+
+        cfg = make_config()
+        cfg.server.db = str(tmp_path / "raft.db")
+        db = make_db(tmp_path)
+        for i, (agent, cost, ti, to) in enumerate([
+            ("alpha", 0.01, 100, 50), ("alpha", 0.02, 200, 60), ("beta", 0.03, 10, 5),
+        ]):
+            rid = db.insert_run(agent, "demo", 1, 1)
+            db.finish_run(rid, "done", None, None, "x", None,
+                          cost_usd=cost, tokens_in=ti, tokens_out=to)
+        client = TestClient(create_app(cfg, db))
+        by_agent = client.get("/usage").json()
+        by_name = {r["agent_id"]: r for r in by_agent}
+        assert by_name["alpha"]["runs"] == 2
+        assert abs(by_name["alpha"]["cost_usd"] - 0.03) < 1e-9
+        assert by_name["beta"]["tokens_out"] == 5
+        assert client.get("/usage?by=day").status_code == 200
+
+    def test_budget_passes_to_claude(self):
+        from mi_raft.runtimes.claude import ClaudeRuntime
+
+        from mi_raft.config import AgentConfig
+
+        agent = AgentConfig(name="a", runtime="claude", work_dir="/tmp", budget_usd=0.5)
+        args = ClaudeRuntime().build_args(agent, None)
+        assert "--max-budget-usd" in args and "0.5" in args
+
+
+class TestAgentStatus:
+    def test_status_transitions(self, tmp_path):
+        db = make_db(
+            tmp_path,
+            [
+                AgentConfig(name="ok", runtime="fake-ok", work_dir="/tmp"),
+                AgentConfig(name="bad", runtime="fake-bad", work_dir="/tmp"),
+            ],
+        )
+
+        class FakeOK(BaseRuntime):
+            name = "fake-ok"
+            def build_args(self, agent, session_id): return ["true"]
+            def parse_output(self, stdout): return RunResult(session_id="x", text="bien")
+            async def run_turn(self, agent, prompt, session_id, timeout_s):
+                return RunResult(session_id="x", text="bien")
+
+        class FakeBad(BaseRuntime):
+            name = "fake-bad"
+            def build_args(self, agent, session_id): return ["true"]
+            def parse_output(self, stdout): return RunResult(session_id=None, text="")
+            async def run_turn(self, agent, prompt, session_id, timeout_s):
+                raise RuntimeError("explotó")
+
+        register_runtime(FakeOK())
+        register_runtime(FakeBad())
+
+        root = db.insert_message("demo", "human", "apc", "@ok hazlo @bad revienta")
+        route_message(db, root)
+        while True:
+            run = db.claim_next_run()
+            if run is None:
+                break
+            asyncio.run(execute_run(db, run))
+
+        statuses = {r["id"]: r["status"] for r in db.list_agents()}
+        assert statuses["ok"] == "idle"
+        assert statuses["bad"] == "error"
+        assert statuses != {"ok": "working"}
+
+
+class TestTaskFromMessage:
+    def test_convert_message_to_task(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from mi_raft.server import create_app
+
+        db = make_db(tmp_path)
+        cfg = make_config()
+        cfg.server.db = str(tmp_path / "raft.db")
+        client = TestClient(create_app(cfg, db))
+
+        mid = db.insert_message("demo", "human", "apc", "Revisar los tests del core\n\nDetalle adicional aquí")
+        r = client.post("/tasks/from-message", json={"message_id": mid})
+        assert r.status_code == 200
+        task = client.get(f"/tasks/{r.json()['id']}").json()
+        assert task["title"] == "Revisar los tests del core"
+        assert "Detalle adicional" in task["description"]
+        assert task["channel_id"] == "demo"
+        assert task["thread_id"] == mid

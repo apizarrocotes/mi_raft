@@ -23,6 +23,7 @@ class AgentConfig:
     memory_file: str | None = None
     server_port: int | None = None
     wake_url: str | None = None
+    budget_usd: float | None = None
 
 
 @dataclass
@@ -104,6 +105,7 @@ def load_config(path: str | Path) -> Config:
                 memory_file=item.get("memory_file"),
                 server_port=item.get("server_port"),
                 wake_url=item.get("wake_url"),
+                budget_usd=item.get("budget_usd"),
             )
         )
     if not agents:

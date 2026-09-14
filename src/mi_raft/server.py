@@ -71,6 +71,10 @@ class MemoryIn(BaseModel):
     content: str
 
 
+class TaskFromMessageIn(BaseModel):
+    message_id: int
+
+
 def create_app(cfg: Config, db: Database) -> FastAPI:
     stuck = db.reset_stuck_runs()
     if stuck:
@@ -254,6 +258,28 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
         runs = route_message(db, mid)
         return {"id": mid, "routed_runs": runs}
 
+    @app.post("/tasks/from-message", dependencies=[Depends(require_key)])
+    def task_from_message(body: TaskFromMessageIn):
+        msg = db.get_message(body.message_id)
+        if msg is None:
+            raise HTTPException(404, f"Mensaje {body.message_id} no existe")
+        if msg["type"] != "comment":
+            raise HTTPException(422, "Solo se pueden convertir comentarios")
+        first_line = msg["text"].strip().splitlines()[0][:120]
+        tid = db.create_task(first_line, msg["text"], msg["channel_id"], msg["author_id"])
+        thread = msg["thread_id"] or msg["id"]
+        with db.tx() as conn:
+            conn.execute(
+                "UPDATE task SET thread_id=?, updated_at=datetime('now') WHERE id=?",
+                (thread, tid),
+            )
+        db.insert_message(
+            msg["channel_id"], "human", "mi_raft",
+            f"[task #{tid}] creada desde este mensaje: {first_line}",
+            thread_id=thread,
+        )
+        return {"id": tid, "thread_id": thread}
+
     @app.get("/meta")
     def meta():
         from . import __version__
@@ -271,6 +297,12 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
             "agents": [r["id"] for r in db.list_agents()],
             "edges": [dict(r) for r in db.org_edges()],
         }
+
+    @app.get("/usage", dependencies=[Depends(require_key)])
+    def usage(by: str = "agent"):
+        if by == "day":
+            return [dict(r) for r in db.usage_by_day()]
+        return [dict(r) for r in db.usage_by_agent()]
 
     @app.post("/channels", dependencies=[Depends(require_key)])
     def new_channel(body: ChannelIn):

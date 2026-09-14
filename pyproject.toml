@@ -20,4 +20,4 @@ miraft = "mi_raft.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mi_raft = ["config.example.yaml", "static/*.html"]
+mi_raft = ["config.example.yaml", "static/*.html", "static/vendor/*.js"]
