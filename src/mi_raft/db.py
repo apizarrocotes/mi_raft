@@ -81,6 +81,24 @@ CREATE INDEX IF NOT EXISTS idx_message_channel ON message(channel_id, id);
 CREATE INDEX IF NOT EXISTS idx_message_thread ON message(thread_id);
 CREATE INDEX IF NOT EXISTS idx_run_agent ON run(agent_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_status ON task(status, id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
+  text, channel_id UNINDEXED, author_id UNINDEXED, message_id UNINDEXED,
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER IF NOT EXISTS message_fts_insert AFTER INSERT ON message BEGIN
+  INSERT INTO message_fts (text, channel_id, author_id, message_id)
+  VALUES (new.text, new.channel_id, new.author_id, new.id);
+END;
+
+CREATE TABLE IF NOT EXISTS webhook (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  url TEXT NOT NULL,
+  events TEXT NOT NULL DEFAULT '[]',
+  secret TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 AGENT_COLUMNS = (
@@ -96,6 +114,8 @@ MIGRATIONS = (
     "ALTER TABLE run ADD COLUMN cost_usd REAL",
     "ALTER TABLE run ADD COLUMN tokens_in INTEGER",
     "ALTER TABLE run ADD COLUMN tokens_out INTEGER",
+    "ALTER TABLE channel ADD COLUMN type TEXT NOT NULL DEFAULT 'channel'",
+    "ALTER TABLE channel ADD COLUMN members_json TEXT NOT NULL DEFAULT '[]'",
 )
 
 
@@ -109,6 +129,7 @@ class Database:
             )
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.lock = threading.Lock()
+        self.on_message_created = None
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
@@ -118,6 +139,12 @@ class Database:
                 self.conn.execute(stmt)
             except sqlite3.OperationalError:
                 pass
+        fts_count = self.conn.execute("SELECT COUNT(*) FROM message_fts").fetchone()[0]
+        if fts_count == 0:
+            self.conn.execute(
+                "INSERT INTO message_fts (text, channel_id, author_id, message_id)"
+                " SELECT text, channel_id, author_id, id FROM message"
+            )
         self.conn.commit()
 
     @contextmanager
@@ -248,8 +275,77 @@ class Database:
     def list_agents(self) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM agent ORDER BY id").fetchall()
 
-    def list_channels(self) -> list[sqlite3.Row]:
-        return self.conn.execute("SELECT * FROM channel ORDER BY id").fetchall()
+    def list_channels(self, include_dms: bool = False) -> list[sqlite3.Row]:
+        if include_dms:
+            return self.conn.execute("SELECT * FROM channel ORDER BY id").fetchall()
+        return self.conn.execute(
+            "SELECT * FROM channel WHERE type = 'channel' ORDER BY id"
+        ).fetchall()
+
+    def get_or_create_dm(self, agent_id: str, human: str = "humano") -> sqlite3.Row:
+        dm_id = f"dm-{agent_id}"
+        members = sorted([human, agent_id])
+        with self.tx() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO channel (id, topic, type, members_json)"
+                " VALUES (?,?,?,?)",
+                (dm_id, f"DM con {agent_id}", "dm", json.dumps(members)),
+            )
+        return self.conn.execute(
+            "SELECT * FROM channel WHERE id = ?", (dm_id,)
+        ).fetchone()
+
+    def list_dms(self) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM channel WHERE type = 'dm' ORDER BY id"
+        ).fetchall()
+
+    def search(
+        self, query: str, channel_id: str | None = None,
+        author: str | None = None, limit: int = 50,
+    ) -> list[sqlite3.Row]:
+        import re as _re
+
+        tokens = _re.findall(r"\w+", query)
+        if not tokens:
+            return []
+        match = " AND ".join(f'"{t}"' for t in tokens)
+        sql = (
+            "SELECT m.* FROM message_fts f JOIN message m ON m.id = f.message_id"
+            " WHERE message_fts MATCH ?"
+        )
+        params: list = [match]
+        if channel_id:
+            sql += " AND f.channel_id = ?"
+            params.append(channel_id)
+        if author:
+            sql += " AND f.author_id = ?"
+            params.append(author)
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit)
+        return self.conn.execute(sql, params).fetchall()
+
+    def activity(self, limit: int = 50) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM message WHERE type = 'status' ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+
+    def add_webhook(self, url: str, events: list[str], secret: str) -> int:
+        with self.tx() as conn:
+            cur = conn.execute(
+                "INSERT INTO webhook (url, events, secret) VALUES (?,?,?)",
+                (url, json.dumps(events), secret),
+            )
+            return int(cur.lastrowid)
+
+    def list_webhooks(self) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM webhook ORDER BY id").fetchall()
+
+    def delete_webhook(self, webhook_id: int) -> bool:
+        with self.tx() as conn:
+            cur = conn.execute("DELETE FROM webhook WHERE id = ?", (webhook_id,))
+            return cur.rowcount > 0
 
     def channel_exists(self, channel_id: str) -> bool:
         row = self.conn.execute(
@@ -272,7 +368,13 @@ class Database:
                 " VALUES (?,?,?,?,?,?)",
                 (channel_id, thread_id, author_type, author_id, text, msg_type),
             )
-            return int(cur.lastrowid)
+            mid = int(cur.lastrowid)
+        if self.on_message_created:
+            try:
+                self.on_message_created(dict(self.get_message(mid)))
+            except Exception:
+                pass
+        return mid
 
     def get_message(self, message_id: int) -> sqlite3.Row | None:
         return self.conn.execute(

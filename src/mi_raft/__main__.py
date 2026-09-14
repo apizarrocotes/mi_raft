@@ -224,6 +224,21 @@ channels:
     print(f"UI: http://127.0.0.1:{port} (te pedirá la API key)")
 
 
+def cmd_search(args) -> None:
+    url = _server_url(args)
+    out = _http_json(
+        "GET",
+        f"{url}/search?q={urllib.parse.quote(args.query)}&limit={args.limit}",
+        key=_api_key(args),
+    )
+    for m in out:
+        time_ = (m.get("created_at") or "")[11:16]
+        thread = f" hilo {m['thread_id']}" if m.get("thread_id") else ""
+        print(f"[#{m['channel_id']} {m['id']} {time_}] {m['author_id']}{thread}: {m['text'][:120]}")
+    if not out:
+        print("(sin resultados)")
+
+
 def cmd_agents(args) -> None:
     out = _http_json("GET", f"{_server_url(args)}/agents", key=_api_key(args))
     for a in out:
@@ -370,8 +385,14 @@ def main(argv=None) -> None:
     p2.add_argument("--author", default="humano")
     p2.set_defaults(func=cmd_task)
 
-    p = sub.add_parser("team", help="gestión de equipos")
+    p = sub.add_parser("search", help="busca mensajes en todo el workspace")
+    p.add_argument("query")
+    p.add_argument("--limit", type=int, default=30)
     p.add_argument("--url", default=None)
+    p.add_argument("--config", default=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("team", help="gestión de equipos")    p.add_argument("--url", default=None)
     team_sub = p.add_subparsers(dest="team_cmd", required=True)
     p2 = team_sub.add_parser("create", help="crea un equipo aislado (server propio)")
     p2.add_argument("name")

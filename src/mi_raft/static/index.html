@@ -149,6 +149,16 @@
   .plus:hover { color: var(--accent); background: var(--panel2); }
   .agent-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 4px; border-bottom: 1px solid var(--border); }
   .agent-row .rt { color: var(--muted); font-size: 11px; }
+  .badge-unread {
+    background: var(--accent); color: #0f1419; border-radius: 9px; font-size: 10px;
+    font-weight: 700; padding: 1px 6px; margin-left: 6px;
+  }
+  .search-hit { padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+  .search-hit:hover { background: var(--panel2); }
+  .search-hit .where { color: var(--muted); font-size: 11px; }
+  .msg.highlight { background: rgba(78, 205, 196, .12); outline: 1px solid var(--accent); }
+  .act-item { padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+  .act-item b { color: var(--text); }
 </style>
 </head>
 <body>
@@ -157,6 +167,10 @@
   <div class="side-section" id="channels-box">
     <div class="side-title">Canales <span class="plus" id="add-channel" title="nuevo canal">+</span></div>
     <div id="channels"></div>
+  </div>
+  <div class="side-section">
+    <div class="side-title">Mensajes directos <span class="plus" id="add-dm" title="abrir DM con un agente">+</span></div>
+    <div id="dms"></div>
   </div>
   <div class="side-section" style="flex:1">
     <div class="side-title">Agentes <span class="plus" id="goto-team" title="ir a Equipo">→</span></div>
@@ -174,7 +188,10 @@
     <div class="tab" data-tab="tasks">Tasks</div>
     <div class="tab" data-tab="workspace">Workspace</div>
     <div class="tab" data-tab="team">Equipo</div>
+    <div class="tab" data-tab="activity">Actividad</div>
     <div class="spacer"></div>
+    <span id="search-btn" style="cursor:pointer;color:var(--muted);font-size:13px" title="buscar (Ctrl+K)">🔍</span>
+    <span id="mute-btn" style="cursor:pointer;font-size:14px" title="silenciar notificaciones">🔔</span>
     <input id="author" title="tu nombre" placeholder="tu nombre">
   </header>
   <div id="view"></div>
@@ -197,6 +214,13 @@
 </div></div>
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
+<div id="search-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:20;align-items:flex-start;justify-content:center;padding-top:10vh">
+  <div class="cardbox" style="width:min(640px,92vw)">
+    <input id="search-input" placeholder="Busca en todo el workspace… (Esc para cerrar)" style="width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:10px 12px;font-size:14px">
+    <div id="search-results" style="margin-top:10px;max-height:50vh;overflow-y:auto"></div>
+  </div>
+</div>
+<div id="toast" style="display:none;position:fixed;bottom:18px;right:18px;z-index:30;background:var(--panel2);border:1px solid var(--accent);border-radius:8px;padding:10px 14px;max-width:340px;font-size:13px;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,.5)"></div>
 
 <script>
 const S = {
@@ -205,6 +229,9 @@ const S = {
   channels: [], agents: [], channel: null, lastId: 0, seen: new Set(),
   messages: [], replyThread: null, tab: "chat", tasks: [],
   team: "mi_raft", workspace: null,
+  unread: JSON.parse(localStorage.getItem("miraft_unread") || "{}"),
+  muted: localStorage.getItem("miraft_muted") === "1",
+  dms: [],
 };
 const $ = (id) => document.getElementById(id);
 const esc = (s) => (s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -252,6 +279,7 @@ function render() {
   const row = (m, reply) => {
     const div = document.createElement("div");
     div.className = "msg" + (reply ? " reply" : "");
+    div.dataset.mid = m.id;
     const initial = (m.author_id || "?")[0].toUpperCase();
     div.innerHTML = `
       <div class="avatar ${authorColor(m)}">${esc(initial)}</div>
@@ -297,7 +325,20 @@ function renderChannels() {
   $("channels").replaceChildren(...S.channels.map(c => {
     const d = document.createElement("div");
     d.className = "side-item" + (c.id === S.channel ? " active" : "");
-    d.textContent = "#" + c.id;
+    const n = S.unread[c.id] || 0;
+    d.innerHTML = "#" + esc(c.id) + (n ? ` <span class="badge-unread">${n}</span>` : "");
+    d.onclick = () => selectChannel(c.id);
+    return d;
+  }));
+}
+
+function renderDms() {
+  $("dms").replaceChildren(...S.dms.map(c => {
+    const d = document.createElement("div");
+    d.className = "side-item" + (c.id === S.channel ? " active" : "");
+    const n = S.unread[c.id] || 0;
+    const agent = (c.members_json ? JSON.parse(c.members_json) : []).find(m => m !== S.author) || c.id;
+    d.innerHTML = "→ " + esc(agent) + (n ? ` <span class="badge-unread">${n}</span>` : "");
     d.onclick = () => selectChannel(c.id);
     return d;
   }));
@@ -305,8 +346,10 @@ function renderChannels() {
 
 async function selectChannel(id) {
   S.channel = id;
-  $("title").textContent = "#" + id;
-  renderChannels();
+  $("title").textContent = id.startsWith("dm-") ? "DM" : "#" + id;
+  delete S.unread[id];
+  localStorage.setItem("miraft_unread", JSON.stringify(S.unread));
+  renderChannels(); renderDms();
   const msgs = await api(`/channels/${id}/messages?limit=200`);
   S.messages = msgs;
   for (const m of msgs) { if (!S.seen.has(m.id)) { S.seen.add(m.id); S.lastId = Math.max(S.lastId, m.id); } }
@@ -324,6 +367,11 @@ function openSSE() {
     S.seen.add(m.id);
     S.lastId = Math.max(S.lastId, m.id);
     if (m.channel_id === S.channel) { S.messages.push(m); render(); }
+    else {
+      S.unread[m.channel_id] = (S.unread[m.channel_id] || 0) + 1;
+      localStorage.setItem("miraft_unread", JSON.stringify(S.unread));
+      renderChannels(); renderDms();
+    }
     maybeRefreshAgents();
     notifyIfNeeded(m);
     refreshHealth(true);
@@ -346,6 +394,110 @@ function maybeRefreshAgents() {
     agentsRefreshing = false;
   }, 2000);
 }
+
+function showToast(text, onclick) {
+  const t = $("toast");
+  t.textContent = text;
+  t.style.display = "block";
+  t.onclick = () => { t.style.display = "none"; if (onclick) onclick(); };
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.style.display = "none"; }, 6000);
+}
+
+function notifyIfNeeded(m) {
+  if (S.muted) return;
+  const myName = ($("author").value || "humano").toLowerCase();
+  const isDm = (m.channel_id || "").startsWith("dm-");
+  const mentionsMe = new RegExp(`@${myName}\\b`, "i").test(m.text || "");
+  const isFailure = m.author_type === "system";
+  if (!mentionsMe && !isFailure && !isDm) return;
+  const label = isDm ? "DM" : "#" + m.channel_id;
+  const text = `${label} · ${m.author_id}: ${(m.text || "").slice(0, 80)}`;
+  showToast(text, () => selectChannel(m.channel_id));
+  if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {
+    try { new Notification("mi_raft — " + label, { body: (m.text || "").slice(0, 120) }); } catch (e) {}
+  }
+}
+
+$("mute-btn").onclick = () => {
+  S.muted = !S.muted;
+  localStorage.setItem("miraft_muted", S.muted ? "1" : "0");
+  $("mute-btn").textContent = S.muted ? "🔕" : "🔔";
+  if (!S.muted && typeof Notification !== "undefined" && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+};
+if (S.muted) $("mute-btn").textContent = "🔕";
+
+const searchOverlay = $("search-overlay");
+function openSearch() { searchOverlay.style.display = "flex"; $("search-input").focus(); }
+function closeSearch() { searchOverlay.style.display = "none"; }
+$("search-btn").onclick = openSearch;
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openSearch(); }
+  if (e.key === "Escape") closeSearch();
+});
+searchOverlay.onclick = (e) => { if (e.target === searchOverlay) closeSearch(); };
+
+let searchTimer = null;
+$("search-input").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runSearch, 250);
+});
+async function runSearch() {
+  const q = $("search-input").value.trim();
+  const box = $("search-results");
+  if (!q) { box.innerHTML = ""; return; }
+  const results = await api(`/search?q=${encodeURIComponent(q)}&limit=30`).catch(() => []);
+  box.replaceChildren(...results.map(m => {
+    const d = document.createElement("div");
+    d.className = "search-hit";
+    const time = (m.created_at || "").slice(0, 16);
+    d.innerHTML = `<div class="where">#${esc(m.channel_id)} · ${esc(m.author_id)} · ${esc(time)}${m.thread_id ? " · hilo " + m.thread_id : ""}</div>
+      <div>${esc((m.text || "").slice(0, 140))}</div>`;
+    d.onclick = () => { closeSearch(); jumpToMessage(m.channel_id, m.id); };
+    return d;
+  }));
+  if (!results.length) box.innerHTML = '<div class="empty">sin resultados</div>';
+}
+
+async function jumpToMessage(channelId, messageId) {
+  await selectChannel(channelId);
+  let el = document.querySelector(`[data-mid="${messageId}"]`);
+  if (!el) {
+    const msgs = await api(`/channels/${channelId}/messages?limit=1000`);
+    S.messages = msgs;
+    render();
+    el = document.querySelector(`[data-mid="${messageId}"]`);
+  }
+  if (el) {
+    el.scrollIntoView({ block: "center" });
+    el.classList.add("highlight");
+    setTimeout(() => el.classList.remove("highlight"), 2500);
+  }
+}
+
+async function renderActivity() {
+  const view = $("view");
+  const items = await api("/activity?limit=80").catch(() => []);
+  view.innerHTML = `
+    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">Actividad reciente del equipo (eventos del sistema)</div>
+    ${items.map(m => `
+      <div class="act-item">
+        <b>#${esc(m.channel_id)}</b> · ${(m.created_at || "").slice(11, 16)} · ${esc(m.text)}
+      </div>`).join("") || '<div class="empty">sin actividad</div>'}`;
+}
+
+$("add-dm").onclick = async () => {
+  const name = prompt("Agente para el DM:");
+  if (!name) return;
+  try {
+    const ch = await api("/dms", { method: "POST", body: JSON.stringify({ agent: name.replace("@", "") }) });
+    S.dms = await api("/dms");
+    renderDms();
+    selectChannel(ch.id);
+  } catch (e) { if (e.message !== "401") alert(e.message); }
+};
 
 async function send() {
   const box = $("box");
@@ -413,6 +565,7 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
   if (S.tab === "tasks") renderTasks().catch(() => {});
   else if (S.tab === "workspace") renderWorkspace().catch(() => {});
   else if (S.tab === "team") renderTeam().catch(() => {});
+  else if (S.tab === "activity") renderActivity().catch(() => {});
   else render();
 });
 
@@ -657,12 +810,15 @@ $("author").addEventListener("change", () => {
 
 async function boot() {
   try {
-    const [meta, channels, agents] = await Promise.all([api("/meta"), api("/channels"), api("/agents")]);
+    const [meta, channels, agents, dms] = await Promise.all([
+      api("/meta"), api("/channels"), api("/agents"), api("/dms").catch(() => []),
+    ]);
     S.team = meta.team; S.workspace = meta.workspace;
+    S.dms = dms;
     document.title = meta.team + " · mi_raft";
     document.querySelector(".logo").innerHTML = esc(meta.team) + '<span>_raft</span>';
     S.channels = channels; S.agents = agents;
-    renderAgents(); renderChannels(); refreshHealth(true);
+    renderAgents(); renderChannels(); renderDms(); refreshHealth(true);
     if (!S.channel && channels.length) await selectChannel(channels[0].id);
     openSSE();
   } catch (e) { refreshHealth(false); }

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
+import secrets as _secrets
+import threading
+import urllib.request
 from contextlib import asynccontextmanager
 from dataclasses import field
 from pathlib import Path
@@ -73,6 +78,16 @@ class MemoryIn(BaseModel):
 
 class TaskFromMessageIn(BaseModel):
     message_id: int
+
+
+class DmIn(BaseModel):
+    agent: str
+
+
+class WebhookIn(BaseModel):
+    url: str
+    events: list[str] = field(default_factory=lambda: ["message.created"])
+    secret: str = ""
 
 
 def create_app(cfg: Config, db: Database) -> FastAPI:
@@ -235,6 +250,13 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
         row = db.finish_task(task_id, "done", body.result)
         if row is None:
             raise HTTPException(409, f"Task {task_id} no está open ni claimed")
+        if row["channel_id"] and row["thread_id"]:
+            db.insert_message(
+                row["channel_id"], "system", "mi_raft",
+                f"task #{task_id} done: {row['title']}",
+                thread_id=row["thread_id"], msg_type="status",
+            )
+        dispatch_webhooks("task.updated", dict(row))
         return {"status": "done"}
 
     @app.post("/tasks/{task_id}/cancel", dependencies=[Depends(require_key)])
@@ -242,6 +264,13 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
         row = db.finish_task(task_id, "cancelled")
         if row is None:
             raise HTTPException(409, f"Task {task_id} no está open ni claimed")
+        if row["channel_id"] and row["thread_id"]:
+            db.insert_message(
+                row["channel_id"], "system", "mi_raft",
+                f"task #{task_id} cancelled: {row['title']}",
+                thread_id=row["thread_id"], msg_type="status",
+            )
+        dispatch_webhooks("task.updated", dict(row))
         return {"status": "cancelled"}
 
     @app.post("/tasks/{task_id}/comment", dependencies=[Depends(require_key)])
@@ -303,6 +332,70 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
         if by == "day":
             return [dict(r) for r in db.usage_by_day()]
         return [dict(r) for r in db.usage_by_agent()]
+
+    def dispatch_webhooks(event: str, payload: dict) -> None:
+        hooks = [w for w in db.list_webhooks() if event in json.loads(w["events"])]
+        if not hooks:
+            return
+        body = json.dumps({"event": event, "payload": payload}, default=str).encode()
+
+        def post(w) -> None:
+            sig = hmac.new(w["secret"].encode(), body, hashlib.sha256).hexdigest()
+            req = urllib.request.Request(
+                w["url"], data=body, method="POST",
+                headers={"Content-Type": "application/json", "X-mi_raft-signature": sig},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=10):
+                    pass
+            except Exception:
+                pass
+
+        for w in hooks:
+            threading.Thread(target=post, args=(w,), daemon=True).start()
+
+    def _on_message_created(row: dict) -> None:
+        dispatch_webhooks("message.created", row)
+
+    db.on_message_created = _on_message_created
+
+    @app.get("/search", dependencies=[Depends(require_key)])
+    def search(q: str, channel: str | None = None, author: str | None = None, limit: int = 50):
+        if not q.strip():
+            raise HTTPException(422, "q vacía")
+        rows = db.search(q, channel, author, min(limit, 200))
+        return [dict(r) for r in rows]
+
+    @app.get("/activity", dependencies=[Depends(require_key)])
+    def activity(limit: int = 50):
+        return [dict(r) for r in db.activity(min(limit, 200))]
+
+    @app.get("/dms", dependencies=[Depends(require_key)])
+    def list_dms():
+        return [dict(r) for r in db.list_dms()]
+
+    @app.post("/dms", dependencies=[Depends(require_key)])
+    def open_dm(body: DmIn):
+        if db.get_agent_row(body.agent) is None:
+            raise HTTPException(404, f"Agente {body.agent} no existe")
+        row = db.get_or_create_dm(body.agent)
+        return dict(row)
+
+    @app.post("/webhooks", dependencies=[Depends(require_key)])
+    def add_webhook(body: WebhookIn):
+        secret = body.secret or _secrets.token_hex(16)
+        wid = db.add_webhook(body.url, body.events, secret)
+        return {"id": wid, "secret": secret}
+
+    @app.get("/webhooks", dependencies=[Depends(require_key)])
+    def list_webhooks():
+        return [dict(r) for r in db.list_webhooks()]
+
+    @app.delete("/webhooks/{webhook_id}", dependencies=[Depends(require_key)])
+    def remove_webhook(webhook_id: int):
+        if not db.delete_webhook(webhook_id):
+            raise HTTPException(404, f"Webhook {webhook_id} no existe")
+        return {"deleted": True}
 
     @app.post("/channels", dependencies=[Depends(require_key)])
     def new_channel(body: ChannelIn):

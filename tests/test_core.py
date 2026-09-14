@@ -823,3 +823,131 @@ class TestTaskFromMessage:
         assert "Detalle adicional" in task["description"]
         assert task["channel_id"] == "demo"
         assert task["thread_id"] == mid
+
+
+class TestSearch:
+    def test_fts_search_and_filters(self, tmp_path):
+        db = make_db(tmp_path)
+        db.insert_message("demo", "human", "apc", "Decidimos que la página de precios lleva descuento")
+        db.insert_message("demo", "agent", "alpha", "La página de precios está lista")
+        db.insert_message("demo2", "human", "apc", "otro canal habla de precios también")
+        db.insert_message("demo", "human", "apc", "mensaje sin la palabra clave")
+
+        hits = db.search("precios")
+        assert len(hits) == 3
+        assert all("precios" in h["text"].lower() for h in hits)
+
+        only_demo = db.search("precios", channel_id="demo")
+        assert len(only_demo) == 2
+
+        by_author = db.search("precios", author="alpha")
+        assert len(by_author) == 1 and by_author[0]["author_id"] == "alpha"
+
+        assert db.search("palabra clave") == [] or len(db.search("palabra clave")) >= 1
+
+        assert db.search("") == []
+        assert db.search("zzzznada") == []
+
+    def test_search_endpoint(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from mi_raft.server import create_app
+
+        cfg = make_config()
+        cfg.server.db = str(tmp_path / "raft.db")
+        db = make_db(tmp_path)
+        db.insert_message("demo", "human", "apc", "el plan de migración está en el doc compartido")
+        client = TestClient(create_app(cfg, db))
+        hits = client.get("/search", params={"q": "migración"}).json()
+        assert len(hits) == 1 and "migración" in hits[0]["text"]
+        assert client.get("/search", params={"q": "  "}).status_code == 422
+
+
+class TestActivityAndDms:
+    def test_activity_lists_status_messages(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from mi_raft.server import create_app
+
+        db = make_db(tmp_path)
+        db.insert_message("demo", "system", "mi_raft", "algo pasó", msg_type="status")
+        db.insert_message("demo", "human", "apc", "comentario normal")
+        cfg = make_config()
+        cfg.server.db = str(tmp_path / "raft.db")
+        client = TestClient(create_app(cfg, db))
+        items = client.get("/activity").json()
+        assert len(items) == 1 and items[0]["type"] == "status"
+
+    def test_dm_creation_and_isolation(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from mi_raft.server import create_app
+
+        cfg = make_config()
+        cfg.server.db = str(tmp_path / "raft.db")
+        db = make_db(tmp_path)
+        client = TestClient(create_app(cfg, db))
+
+        assert client.post("/dms", json={"agent": "no-existe"}).status_code == 404
+        ch1 = client.post("/dms", json={"agent": "alpha"}).json()
+        ch2 = client.post("/dms", json={"agent": "alpha"}).json()
+        assert ch1["id"] == ch2["id"] == "dm-alpha"
+        assert ch1["type"] == "dm"
+
+        public = client.get("/channels").json()
+        assert all(not c["id"].startswith("dm-") for c in public)
+        dms = client.get("/dms").json()
+        assert [d["id"] for d in dms] == ["dm-alpha"]
+
+        r = client.post("/channels/dm-alpha/messages", json={"text": "@alpha hola privado"})
+        assert r.status_code == 200
+        runs = db.conn.execute("SELECT * FROM run WHERE agent_id='alpha'").fetchall()
+        assert len(runs) == 1
+
+    def test_webhook_signature_flow(self, tmp_path):
+        import hashlib
+        import hmac as hmac_mod
+        import http.server
+        import threading
+
+        from fastapi.testclient import TestClient
+
+        from mi_raft.server import create_app
+
+        received = []
+
+        class Hook(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                received.append((self.headers.get("X-mi_raft-signature"), body))
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"ok")
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hook)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        port = srv.server_address[1]
+
+        cfg = make_config()
+        cfg.server.db = str(tmp_path / "raft.db")
+        client = TestClient(create_app(cfg, make_db(tmp_path)))
+        created = client.post(
+            "/webhooks",
+            json={"url": f"http://127.0.0.1:{port}/hook", "events": ["message.created"], "secret": "secreto"},
+        ).json()
+        client.post("/channels/demo/messages", json={"text": "dispara el webhook"})
+        import time as _t
+        deadline = _t.time() + 5
+        while not received and _t.time() < deadline:
+            _t.sleep(0.1)
+        assert received, "el webhook no llegó"
+        sig, body = received[0]
+        expected = hmac_mod.new(b"secreto", body, hashlib.sha256).hexdigest()
+        assert sig == expected
+        assert json.loads(body)["event"] == "message.created"
+        assert client.delete(f"/webhooks/{created['id']}").status_code == 200
+        srv.shutdown()
