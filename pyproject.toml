@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mi-raft"
+version = "0.1.0"
+description = "Orquestador multi-agente self-hosted estilo raft.build"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+miraft = "mi_raft.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mi_raft = ["config.example.yaml", "static/*.html"]

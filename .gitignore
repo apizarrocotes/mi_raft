@@ -1,0 +1,10 @@
+__pycache__/
+*.egg-info/
+.venv/
+data/
+teams/
+raft.yaml
+.pytest_cache/
+nohup.out
+.DS_Store
+*.log

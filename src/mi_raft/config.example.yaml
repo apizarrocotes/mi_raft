@@ -1,0 +1,60 @@
+server:
+  host: 127.0.0.1
+  port: 8420
+  db: data/raft.db
+  # api_keys:            # si se define al menos una, TODA la API exige
+  #   - cambia-esta-clave #   Authorization: Bearer <clave> (o X-mi-raft-key)
+
+defaults:
+  max_concurrent: 1
+  timeout_s: 600
+
+agents:
+  - name: opencode
+    runtime: opencode
+    work_dir: ~/agents/mi_raft/data/sandbox
+    memory_file: data/memory/opencode.md
+    instructions: |
+      Eres un agente de desarrollo del equipo. Responde conciso y en español.
+    model: null
+    permissions:
+      mode: auto
+    max_concurrent: 1
+    timeout_s: 600
+
+  - name: claude-code
+    runtime: claude
+    work_dir: ~/agents/mi_raft/data/sandbox
+    instructions: |
+      Eres un agente revisor. Sé crítico y breve.
+    permissions:
+      mode: dontAsk
+
+  - name: opencode-server
+    runtime: opencode-serve
+    work_dir: ~/agents/mi_raft/data/sandbox
+    instructions: |
+      Eres un agente del equipo. Responde conciso y en español.
+    permissions:
+      mode: auto
+    server_port: 14610
+
+  - name: pi
+    runtime: pi
+    work_dir: ~/agents/mi_raft/data/sandbox
+    instructions: |
+      Eres un agente de investigación. Responde en español.
+    permissions:
+      tools: [read, grep, find, ls]
+
+  # Agente externo: mi_raft le envía un wake (solo IDs) y él responde vía API.
+  # Contrato completo en docs/external-agents.md; demo en scripts/external_agent_demo.py
+  # - name: eco
+  #   runtime: external
+  #   work_dir: /tmp
+  #   wake_url: http://127.0.0.1:14620/wake
+  #   timeout_s: 120
+
+channels:
+  - name: demo
+    topic: Canal de demostración de mi_raft

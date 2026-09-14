@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mi_raft</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #161d26; --panel2: #1d2633; --border: #2a3646;
+    --text: #dbe4ee; --muted: #7d8ca0; --accent: #4ecdc4; --accent2: #f7b267;
+    --human: #5b9cf5; --agent: #4ecdc4; --system: #7d8ca0;
+    --danger: #ef6b6b; --ok: #6bd968;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; height: 100vh; overflow: hidden;
+  }
+  aside {
+    width: 230px; min-width: 230px; background: var(--panel);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+  }
+  .logo { padding: 14px 16px; font-weight: 700; font-size: 16px; letter-spacing: .5px; }
+  .logo span { color: var(--accent); }
+  .side-section { padding: 8px 0; border-top: 1px solid var(--border); overflow-y: auto; }
+  .side-title { padding: 6px 16px; font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: 1px; }
+  .side-item {
+    padding: 6px 16px; cursor: pointer; color: var(--text); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .side-item:hover { background: var(--panel2); }
+  .side-item.active { background: var(--panel2); border-left: 3px solid var(--accent); padding-left: 13px; }
+  .side-item .rt { color: var(--muted); font-size: 11px; margin-left: 6px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+  .dot.on { background: var(--ok); }
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  header {
+    display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+    border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin-right: 8px; }
+  .tab { padding: 5px 12px; border-radius: 6px; cursor: pointer; color: var(--muted); }
+  .tab.active { background: var(--panel2); color: var(--text); }
+  .spacer { flex: 1; }
+  header input {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 5px 8px; width: 110px; font-size: 13px;
+  }
+  #view { flex: 1; overflow-y: auto; padding: 12px 16px; }
+  .msg { display: flex; gap: 10px; padding: 6px 8px; border-radius: 8px; }
+  .msg:hover { background: var(--panel); }
+  .msg.reply { margin-left: 34px; border-left: 2px solid var(--border); border-radius: 0 8px 8px 0; }
+  .avatar {
+    width: 30px; height: 30px; min-width: 30px; border-radius: 8px; display: flex;
+    align-items: center; justify-content: center; font-weight: 700; font-size: 13px; color: #0f1419;
+  }
+  .avatar.human { background: var(--human); } .avatar.agent { background: var(--agent); }
+  .avatar.system { background: var(--system); }
+  .meta { display: flex; gap: 8px; align-items: baseline; }
+  .author { font-weight: 600; }
+  .author.agent { color: var(--agent); } .author.human { color: var(--human); }
+  .author.system { color: var(--system); }
+  .time { color: var(--muted); font-size: 11px; }
+  .tid { color: var(--muted); font-size: 11px; cursor: pointer; }
+  .tid:hover { color: var(--accent); }
+  .text { white-space: pre-wrap; word-break: break-word; }
+  .msg.system .text { color: var(--muted); font-style: italic; }
+  #composer { border-top: 1px solid var(--border); padding: 10px 16px; background: var(--panel); position: relative; }
+  #replychip {
+    display: none; margin-bottom: 6px; font-size: 12px; color: var(--accent2);
+  }
+  #replychip b { cursor: pointer; }
+  #box {
+    width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 9px 11px; font: inherit; resize: vertical; min-height: 42px; max-height: 140px;
+  }
+  #box:focus { outline: 1px solid var(--accent); }
+  .composer-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  .btn {
+    background: var(--accent); color: #0f1419; border: 0; border-radius: 6px;
+    padding: 6px 14px; font-weight: 600; cursor: pointer; font-size: 13px;
+  }
+  .btn.ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--border); font-weight: 400; }
+  .btn.mini { padding: 3px 8px; font-size: 12px; }
+  #mentions {
+    display: none; position: absolute; bottom: 100%; left: 16px; margin-bottom: 4px;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  }
+  #mentions div { padding: 6px 12px; cursor: pointer; }
+  #mentions div:hover { background: var(--accent); color: #0f1419; }
+  .tasks-form { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tasks-form input, .tasks-form select {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 7px 9px; font-size: 13px;
+  }
+  .tasks-form input { flex: 1; min-width: 200px; }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+  .badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge.open { background: #33415a; color: var(--text); }
+  .badge.claimed { background: var(--accent2); color: #0f1419; }
+  .badge.done { background: var(--ok); color: #0f1419; }
+  .badge.cancelled { background: var(--danger); color: #0f1419; }
+  #overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.65);
+    align-items: center; justify-content: center; z-index: 10;
+  }
+  #overlay .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 22px; width: 320px;
+  }
+  #overlay h2 { font-size: 15px; margin-bottom: 10px; }
+  #overlay input { width: 100%; margin: 10px 0; }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+  #ws pre {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; overflow: auto; max-height: 60vh; white-space: pre-wrap; font-size: 12.5px;
+  }
+  .ws-item { padding: 4px 8px; cursor: pointer; border-radius: 6px; font-family: ui-monospace, monospace; font-size: 12.5px; }
+  .ws-item:hover { background: var(--panel2); }
+  .ws-item.dir { color: var(--accent2); cursor: default; }
+  .ws-cols { display: flex; gap: 16px; }
+  .ws-list { width: 320px; min-width: 260px; }
+  .team-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .cardbox { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .cardbox h3 { font-size: 13px; margin-bottom: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+  .cardbox input, .cardbox select, .cardbox textarea {
+    width: 100%; background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 7px 9px; font-size: 13px; margin-bottom: 8px; font-family: inherit;
+  }
+  .cardbox textarea { min-height: 70px; resize: vertical; }
+  .plus {
+    display: inline-block; margin-left: 8px; cursor: pointer; color: var(--muted);
+    font-weight: 700; padding: 0 4px; border-radius: 4px;
+  }
+  .plus:hover { color: var(--accent); background: var(--panel2); }
+  .agent-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 4px; border-bottom: 1px solid var(--border); }
+  .agent-row .rt { color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+<aside>
+  <div class="logo">mi<span>_raft</span></div>
+  <div class="side-section" id="channels-box">
+    <div class="side-title">Canales <span class="plus" id="add-channel" title="nuevo canal">+</span></div>
+    <div id="channels"></div>
+  </div>
+  <div class="side-section" style="flex:1">
+    <div class="side-title">Agentes <span class="plus" id="goto-team" title="ir a Equipo">→</span></div>
+    <div id="agents"></div>
+  </div>
+  <div class="side-section">
+    <div class="side-title">Estado</div>
+    <div style="padding:4px 16px 10px"><span class="dot" id="health-dot"></span><span id="health-text">conectando…</span></div>
+  </div>
+</aside>
+<main>
+  <header>
+    <h1 id="title">#…</h1>
+    <div class="tab active" data-tab="chat">Chat</div>
+    <div class="tab" data-tab="tasks">Tasks</div>
+    <div class="tab" data-tab="workspace">Workspace</div>
+    <div class="tab" data-tab="team">Equipo</div>
+    <div class="spacer"></div>
+    <input id="author" title="tu nombre" placeholder="tu nombre">
+  </header>
+  <div id="view"></div>
+  <div id="composer">
+    <div id="replychip">respondiendo en hilo <b id="replytid">#…</b> ✕</div>
+    <div id="mentions"></div>
+    <textarea id="box" placeholder="Escribe un mensaje… @ para mencionar a un agente"></textarea>
+    <div class="composer-row">
+      <span class="hint" style="color:var(--muted);font-size:11px">Enter envía · Shift+Enter salto de línea</span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn" id="send">Enviar</button>
+    </div>
+  </div>
+</main>
+<div id="overlay"><div class="card">
+  <h2>API key requerida</h2>
+  <div style="color:var(--muted);font-size:13px">Este server exige autenticación.</div>
+  <input id="keyinput" placeholder="API key" type="password">
+  <button class="btn" id="keysave">Guardar</button>
+</div></div>
+
+<script>
+const S = {
+  key: localStorage.getItem("miraft_key") || "",
+  author: localStorage.getItem("miraft_author") || "humano",
+  channels: [], agents: [], channel: null, lastId: 0, seen: new Set(),
+  messages: [], replyThread: null, tab: "chat", tasks: [],
+  team: "mi_raft", workspace: null,
+};
+const $ = (id) => document.getElementById(id);
+const esc = (s) => (s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function api(path, opts = {}) {
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  if (S.key) headers["Authorization"] = "Bearer " + S.key;
+  const resp = await fetch(path, { ...opts, headers });
+  if (resp.status === 401) { $("overlay").style.display = "flex"; throw new Error("401"); }
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+function saveKey() {
+  S.key = $("keyinput").value.trim();
+  localStorage.setItem("miraft_key", S.key);
+  $("overlay").style.display = "none";
+  boot();
+}
+$("keysave").onclick = saveKey;
+$("keyinput").addEventListener("keydown", e => { if (e.key === "Enter") saveKey(); });
+
+function authorColor(m) {
+  return m.author_type === "agent" ? "agent" : m.author_type === "system" ? "system" : "human";
+}
+
+function render() {
+  if (S.tab !== "chat") return;
+  const view = $("view");
+  const roots = S.messages.filter(m => !m.thread_id);
+  const byThread = {};
+  for (const m of S.messages) {
+    if (m.thread_id) (byThread[m.thread_id] ??= []).push(m);
+  }
+  const loaded = new Set(S.messages.map(m => m.id));
+  const frag = document.createDocumentFragment();
+  const row = (m, reply) => {
+    const div = document.createElement("div");
+    div.className = "msg" + (reply ? " reply" : "");
+    const initial = (m.author_id || "?")[0].toUpperCase();
+    div.innerHTML = `
+      <div class="avatar ${authorColor(m)}">${esc(initial)}</div>
+      <div style="min-width:0">
+        <div class="meta">
+          <span class="author ${authorColor(m)}">${esc(m.author_id)}</span>
+          <span class="time">${(m.created_at || "").slice(11, 16)}</span>
+          ${!reply ? `<span class="tid" data-tid="${m.id}">hilo #${m.id} · responder</span>` : ""}
+        </div>
+        <div class="text">${esc(m.text)}</div>
+      </div>`;
+    return div;
+  };
+  if (!roots.length) frag.append(Object.assign(document.createElement("div"), { className: "empty", textContent: "Canal vacío. Escribe el primer mensaje; menciona a un agente con @nombre." }));
+  for (const m of roots) {
+    frag.append(row(m, false));
+    for (const r of byThread[m.id] || []) frag.append(row(r, true));
+    delete byThread[m.id];
+  }
+  for (const [tid, list] of Object.entries(byThread)) {
+    const label = document.createElement("div");
+    label.className = "msg";
+    label.innerHTML = `<div style="color:var(--muted);font-size:12px">…hilo #${tid}</div>`;
+    frag.append(label);
+    for (const r of list) frag.append(row(r, true));
+  }
+  view.replaceChildren(frag);
+  view.scrollTop = view.scrollHeight;
+}
+
+function renderAgents() {
+  $("agents").replaceChildren(...S.agents.map(a => {
+    const d = document.createElement("div");
+    d.className = "side-item";
+    d.innerHTML = `<span class="dot on"></span>${esc(a.id)}<span class="rt">${esc(a.runtime)}</span>`;
+    return d;
+  }));
+}
+
+function renderChannels() {
+  $("channels").replaceChildren(...S.channels.map(c => {
+    const d = document.createElement("div");
+    d.className = "side-item" + (c.id === S.channel ? " active" : "");
+    d.textContent = "#" + c.id;
+    d.onclick = () => selectChannel(c.id);
+    return d;
+  }));
+}
+
+async function selectChannel(id) {
+  S.channel = id;
+  $("title").textContent = "#" + id;
+  renderChannels();
+  const msgs = await api(`/channels/${id}/messages?limit=200`);
+  S.messages = msgs;
+  for (const m of msgs) { if (!S.seen.has(m.id)) { S.seen.add(m.id); S.lastId = Math.max(S.lastId, m.id); } }
+  render();
+}
+
+function openSSE() {
+  if (S.es) S.es.close();
+  const url = `/events?last_id=${S.lastId}` + (S.key ? `&api_key=${encodeURIComponent(S.key)}` : "");
+  const es = new EventSource(url);
+  S.es = es;
+  es.addEventListener("message", (ev) => {
+    const m = JSON.parse(ev.data);
+    if (S.seen.has(m.id)) return;
+    S.seen.add(m.id);
+    S.lastId = Math.max(S.lastId, m.id);
+    if (m.channel_id === S.channel) { S.messages.push(m); render(); }
+    refreshHealth(true);
+  });
+  es.onerror = () => refreshHealth(false);
+  es.onopen = () => refreshHealth(true);
+}
+
+async function refreshHealth(ok) {
+  $("health-dot").className = "dot" + (ok ? " on" : "");
+  $("health-text").textContent = ok ? "conectado" : "reconectando…";
+}
+
+async function send() {
+  const box = $("box");
+  const text = box.value.trim();
+  if (!text || !S.channel) return;
+  const body = { text, author: $("author").value || "humano" };
+  if (S.replyThread) body.thread_id = S.replyThread;
+  try {
+    await api(`/channels/${S.channel}/messages`, { method: "POST", body: JSON.stringify(body) });
+    box.value = ""; clearReply(); hideMentions();
+  } catch (e) { if (e.message !== "401") alert(e.message); }
+}
+$("send").onclick = send;
+$("box").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+function setReply(tid) {
+  S.replyThread = tid;
+  $("replychip").style.display = "block";
+  $("replytid").textContent = "#" + tid;
+  $("box").focus();
+}
+function clearReply() { S.replyThread = null; $("replychip").style.display = "none"; }
+$("replytid").onclick = clearReply;
+$("view").addEventListener("click", (e) => {
+  const tid = e.target.dataset?.tid;
+  if (tid) setReply(Number(tid));
+});
+
+function hideMentions() { $("mentions").style.display = "none"; }
+$("box").addEventListener("input", () => {
+  const pos = $("box").selectionStart;
+  const before = $("box").value.slice(0, pos);
+  const m = before.match(/@([\w-]*)$/);
+  if (!m || !S.agents.length) { hideMentions(); return; }
+  const q = m[1].toLowerCase();
+  const matches = S.agents.filter(a => a.id.toLowerCase().startsWith(q)).slice(0, 6);
+  if (!matches.length) { hideMentions(); return; }
+  const box = $("mentions");
+  box.replaceChildren(...matches.map(a => {
+    const d = document.createElement("div");
+    d.textContent = "@" + a.id;
+    d.onclick = () => {
+      const v = $("box").value;
+      $("box").value = v.slice(0, pos - m[0].length) + "@" + a.id + " " + v.slice(pos);
+      hideMentions(); $("box").focus();
+    };
+    return d;
+  }));
+  box.style.display = "block";
+});
+$("box").addEventListener("keydown", (e) => { if (e.key === "Escape") hideMentions(); });
+
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+  t.classList.add("active");
+  S.tab = t.dataset.tab;
+  if (S.tab === "tasks") renderTasks().catch(() => {});
+  else if (S.tab === "workspace") renderWorkspace().catch(() => {});
+  else if (S.tab === "team") renderTeam().catch(() => {});
+  else render();
+});
+
+async function renderWorkspace() {
+  const view = $("view");
+  const data = await api("/workspace/tree").catch(() => null);
+  if (!data) {
+    view.innerHTML = '<div class="empty">Este equipo no tiene workspace compartido (defínelo en raft.yaml)</div>';
+    return;
+  }
+  view.innerHTML = `
+    <div style="color:var(--muted);font-size:12px;margin-bottom:8px">workspace: ${esc(data.root)}</div>
+    <div class="ws-cols">
+      <div class="ws-list" id="ws-list"></div>
+      <div id="ws" style="flex:1;min-width:0"><div class="empty">Selecciona un fichero</div></div>
+    </div>`;
+  const list = $("ws-list");
+  list.replaceChildren(...data.items.map(it => {
+    const d = document.createElement("div");
+    d.className = "ws-item" + (it.type === "dir" ? " dir" : "");
+    d.textContent = (it.type === "dir" ? "▸ " : "  ") + it.path;
+    if (it.type === "file") {
+      d.onclick = async () => {
+        const f = await api("/workspace/file?path=" + encodeURIComponent(it.path));
+        $("ws").innerHTML = `<div style="color:var(--muted);font-size:12px;margin-bottom:6px">${esc(f.path)}</div><pre>${esc(f.content)}</pre>`;
+      };
+    }
+    return d;
+  }));
+}
+
+async function renderTeam() {
+  const view = $("view");
+  const [org, agents] = await Promise.all([api("/org"), api("/agents")]);
+  const rtOpts = ["claude", "opencode", "opencode-serve", "pi"]
+    .map(r => `<option value="${r}">${r}</option>`).join("");
+  const graph = orgSVG(org);
+  view.innerHTML = `
+    <div class="team-grid">
+      <div class="cardbox">
+        <h3>Organigrama (handoffs permitidos)</h3>
+        ${graph}
+      </div>
+      <div class="cardbox">
+        <h3>Dar de alta un agente</h3>
+        <input id="ag-name" placeholder="nombre (ej. revisor)">
+        <select id="ag-runtime">${rtOpts}</select>
+        <textarea id="ag-instructions" placeholder="instrucciones del rol…"></textarea>
+        <div style="color:var(--muted);font-size:11px;margin-bottom:8px" id="ag-workdir"></div>
+        <button class="btn" id="ag-create">Crear agente</button>
+        <div style="margin-top:14px">
+          <h3 style="margin-top:8px">Agentes del equipo</h3>
+          ${agents.map(a => `
+            <div class="agent-row">
+              <span><b>${esc(a.id)}</b> <span class="rt">${esc(a.runtime)}</span></span>
+              <span class="rt">${esc((a.work_dir || "").split("/").slice(-1)[0])}</span>
+            </div>`).join("")}
+        </div>
+      </div>
+    </div>`;
+  const metaTeam = S.team;
+  const wd = S.workspace;
+  $("ag-workdir").textContent = wd ? "work_dir por defecto: " + wd : "sin workspace por defecto en raft.yaml";
+  $("ag-create").onclick = async () => {
+    const name = $("ag-name").value.trim();
+    if (!name) return;
+    try {
+      await api("/agents", {
+        method: "POST",
+        body: JSON.stringify({
+          name, runtime: $("ag-runtime").value,
+          instructions: $("ag-instructions").value,
+        }),
+      });
+      renderTeam(); renderAgents();
+    } catch (e) { if (e.message !== "401") alert(e.message); }
+  };
+}
+
+function orgSVG(org) {
+  const agents = org.agents;
+  const edges = org.edges;
+  if (!agents.length) return '<div class="empty">Sin agentes aún</div>';
+  if (!edges.length) {
+    return `<div class="empty">Sin restricciones: todos los agentes pueden pasar trabajo a todos.<br>
+      Define <code>org:</code> en raft.yaml para restringir handoffs.</div>`;
+  }
+  const W = 420, H = Math.max(200, agents.length * 70);
+  const pos = {};
+  agents.forEach((a, i) => { pos[a] = { x: 70, y: 40 + i * 70 }; });
+  const targets = [...new Set(edges.map(e => e.to_id))];
+  targets.forEach((a, i) => {
+    if (!pos[a]) pos[a] = { x: W - 90, y: 40 + i * 70 };
+  });
+  const lines = edges.map(e => {
+    const f = pos[e.from_id], t = pos[e.to_id];
+    if (!f || !t) return "";
+    return `<line x1="${f.x + 44}" y1="${f.y + 12}" x2="${t.x - 44}" y2="${t.y + 12}"
+      stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrow)"/>`;
+  }).join("");
+  const nodes = Object.entries(pos).map(([a, p]) => `
+    <g><rect x="${p.x - 44}" y="${p.y}" width="88" height="26" rx="8" fill="var(--panel2)" stroke="var(--border)"/>
+    <text x="${p.x}" y="${p.y + 17}" text-anchor="middle" fill="var(--text)" font-size="12">${esc(a)}</text></g>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-height:60vh">
+    <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 z" fill="var(--accent)"/></marker></defs>
+    ${lines}${nodes}</svg>
+    <div style="color:var(--muted);font-size:11px;margin-top:6px">${edges.length} conexión(es) permitidas</div>`;
+}
+
+$("add-channel").onclick = async () => {
+  const name = prompt("Nombre del nuevo canal (sin #):");
+  if (!name) return;
+  try {
+    await api("/channels", { method: "POST", body: JSON.stringify({ name }) });
+    const channels = await api("/channels");
+    S.channels = channels; renderChannels(); selectChannel(name.replace("#", ""));
+  } catch (e) { if (e.message !== "401") alert(e.message); }
+};
+$("goto-team").onclick = () => document.querySelector('[data-tab="team"]').click();
+
+async function renderTasks() {
+  const view = $("view");
+  const tasks = await api("/tasks").catch(() => []);
+  const agents = S.agents;
+  const opts = ['<option value="">— sin asignar —</option>']
+    .concat(agents.map(a => `<option value="${esc(a.id)}">@${esc(a.id)}</option>`)).join("");
+  const rows = tasks.map(t => `
+    <tr>
+      <td style="color:var(--muted)">#${t.id}</td>
+      <td><div>${esc(t.title)}</div>${t.description ? `<div style="color:var(--muted);font-size:12px">${esc(t.description)}</div>` : ""}</td>
+      <td><span class="badge ${t.status}">${t.status}</span></td>
+      <td>${t.assignee_id ? esc(t.assignee_type) + ":" + esc(t.assignee_id) : "—"}</td>
+      <td>${t.channel_id ? "#" + esc(t.channel_id) : "—"}</td>
+      <td>${(t.status === "open" || t.status === "claimed") ? `
+        <button class="btn mini ghost" data-done="${t.id}">done</button>
+        <button class="btn mini ghost" data-cancel="${t.id}">cancel</button>` : ""}</td>
+    </tr>`).join("");
+  view.innerHTML = `
+    <div class="tasks-form">
+      <input id="task-title" placeholder="Nueva task…">
+      <select id="task-assignee">${opts}</select>
+      <button class="btn" id="task-create">Crear</button>
+    </div>
+    <table>
+      <tr><th>id</th><th>task</th><th>estado</th><th>asignada a</th><th>canal</th><th></th></tr>
+      ${rows || '<tr><td colspan="6" class="empty">Sin tasks</td></tr>'}
+    </table>`;
+  $("task-create").onclick = async () => {
+    const title = $("task-title").value.trim();
+    if (!title) return;
+    const assignee = $("task-assignee").value || null;
+    await api("/tasks", { method: "POST", body: JSON.stringify({ title, channel: S.channel, assignee }) }).catch(e => alert(e.message));
+    renderTasks();
+  };
+  view.querySelectorAll("[data-done]").forEach(b => b.onclick = async () => {
+    await api(`/tasks/${b.dataset.done}/done`, { method: "POST", body: "{}" }); renderTasks();
+  });
+  view.querySelectorAll("[data-cancel]").forEach(b => b.onclick = async () => {
+    await api(`/tasks/${b.dataset.cancel}/cancel`, { method: "POST", body: "{}" }); renderTasks();
+  });
+}
+
+$("author").value = S.author;
+$("author").addEventListener("change", () => {
+  S.author = $("author").value;
+  localStorage.setItem("miraft_author", S.author);
+});
+
+async function boot() {
+  try {
+    const [meta, channels, agents] = await Promise.all([api("/meta"), api("/channels"), api("/agents")]);
+    S.team = meta.team; S.workspace = meta.workspace;
+    document.title = meta.team + " · mi_raft";
+    document.querySelector(".logo").innerHTML = esc(meta.team) + '<span>_raft</span>';
+    S.channels = channels; S.agents = agents;
+    renderAgents(); renderChannels(); refreshHealth(true);
+    if (!S.channel && channels.length) await selectChannel(channels[0].id);
+    openSSE();
+  } catch (e) { refreshHealth(false); }
+}
+boot();
+setInterval(() => { if (S.tab === "tasks") renderTasks().catch(() => {}); }, 5000);
+</script>
+</body>
+</html>
