@@ -90,6 +90,12 @@ class WebhookIn(BaseModel):
     secret: str = ""
 
 
+class BreakdownIn(BaseModel):
+    goal: str
+    agent: str
+    channel: str | None = None
+
+
 def create_app(cfg: Config, db: Database) -> FastAPI:
     stuck = db.reset_stuck_runs()
     if stuck:
@@ -219,7 +225,7 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
         if task.assignee:
             claimed = db.claim_task(tid, "agent", task.assignee)
             if claimed is None:
-                raise HTTPException(409, f"Task {tid} no está open")
+                raise HTTPException(409, f"Task {tid} no está todo")
             _assign_task_message(tid, task.assignee)
         return {"id": tid, "assignee": task.assignee}
 
@@ -241,15 +247,22 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
             raise HTTPException(404, f"Task {task_id} no existe")
         claimed = db.claim_task(task_id, "agent", body.agent)
         if claimed is None:
-            raise HTTPException(409, f"Task {task_id} no está open")
+            raise HTTPException(409, f"Task {task_id} no está todo")
         mid = _assign_task_message(task_id, body.agent)
         return {"claimed": True, "message_id": mid}
+
+    @app.post("/tasks/{task_id}/review", dependencies=[Depends(require_key)])
+    def review_task(task_id: int):
+        row = db.review_task(task_id)
+        if row is None:
+            raise HTTPException(409, f"Task {task_id} no está in_progress")
+        return {"status": "in_review"}
 
     @app.post("/tasks/{task_id}/done", dependencies=[Depends(require_key)])
     def done_task(task_id: int, body: TaskDoneIn):
         row = db.finish_task(task_id, "done", body.result)
         if row is None:
-            raise HTTPException(409, f"Task {task_id} no está open ni claimed")
+            raise HTTPException(409, f"Task {task_id} no está activa (todo/in_progress/in_review)")
         if row["channel_id"] and row["thread_id"]:
             db.insert_message(
                 row["channel_id"], "system", "mi_raft",
@@ -263,7 +276,7 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
     def cancel_task(task_id: int):
         row = db.finish_task(task_id, "cancelled")
         if row is None:
-            raise HTTPException(409, f"Task {task_id} no está open ni claimed")
+            raise HTTPException(409, f"Task {task_id} no está activa (todo/in_progress/in_review)")
         if row["channel_id"] and row["thread_id"]:
             db.insert_message(
                 row["channel_id"], "system", "mi_raft",
@@ -308,6 +321,54 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
             thread_id=thread,
         )
         return {"id": tid, "thread_id": thread}
+
+    @app.post("/tasks/breakdown", dependencies=[Depends(require_key)])
+    def breakdown(body: BreakdownIn):
+        if db.get_agent_row(body.agent) is None:
+            raise HTTPException(404, f"Agente {body.agent} no existe")
+        agent = db.get_agent(body.agent)
+        if agent.runtime == "external":
+            raise HTTPException(422, "El desglose requiere un agente local")
+        channel = body.channel.lstrip("#") if body.channel else None
+        if channel and not db.channel_exists(channel):
+            raise HTTPException(404, f"Canal desconocido: #{channel}")
+        prompt = (
+            f"Objetivo: {body.goal}\n\n"
+            "Divide este objetivo en subtasks independientes (máximo 6) que no se bloqueen entre sí.\n"
+            'Responde SOLO con un array JSON de objetos {"title": "...", "description": "..."} '
+            "sin texto adicional."
+        )
+
+        async def call():
+            from .runtimes import get_runtime
+
+            rt = get_runtime(agent.runtime)
+            return await rt.run_turn(agent, prompt, None, min(agent.timeout_s, 180))
+
+        import asyncio as _asyncio
+
+        try:
+            result = _asyncio.run(call())
+        except Exception as exc:
+            raise HTTPException(502, f"El desglose falló: {exc}")
+        import re as _re
+
+        match = _re.search(r"\[.*\]", result.text, _re.DOTALL)
+        if not match:
+            raise HTTPException(502, f"El agente no devolvió JSON: {result.text[:200]}")
+        try:
+            items = json.loads(match.group(0))
+        except ValueError:
+            raise HTTPException(502, f"JSON inválido del agente: {result.text[:200]}")
+        if not isinstance(items, list) or not items:
+            raise HTTPException(502, "El agente devolvió un desglose vacío")
+        parent = db.create_task(body.goal[:120], body.goal, channel, created_by=body.agent)
+        for item in items[:6]:
+            if isinstance(item, dict) and item.get("title"):
+                db.create_subtask(parent, str(item["title"])[:120], str(item.get("description") or ""))
+        subtasks = db.list_subtasks(parent)
+        dispatch_webhooks("task.updated", dict(db.get_task(parent)))
+        return {"parent_id": parent, "subtasks": [dict(s) for s in subtasks]}
 
     @app.get("/meta")
     def meta():

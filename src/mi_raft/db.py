@@ -32,8 +32,9 @@ CREATE TABLE IF NOT EXISTS task (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'open'
-    CHECK(status IN ('open','claimed','done','cancelled')),
+  status TEXT NOT NULL DEFAULT 'todo'
+    CHECK(status IN ('todo','in_progress','in_review','done','cancelled')),
+  parent_task_id INTEGER,
   assignee_type TEXT CHECK(assignee_type IN ('human','agent')),
   assignee_id TEXT,
   channel_id TEXT,
@@ -103,7 +104,7 @@ CREATE TABLE IF NOT EXISTS webhook (
 
 AGENT_COLUMNS = (
     "id, runtime, work_dir, instructions, model, permissions_json, "
-    "extra_args_json, max_concurrent, timeout_s, memory_file, server_port, wake_url, budget_usd"
+    "extra_args_json, max_concurrent, timeout_s, memory_file, server_port, wake_url, budget_usd, sandbox_json"
 )
 
 MIGRATIONS = (
@@ -116,8 +117,8 @@ MIGRATIONS = (
     "ALTER TABLE run ADD COLUMN tokens_out INTEGER",
     "ALTER TABLE channel ADD COLUMN type TEXT NOT NULL DEFAULT 'channel'",
     "ALTER TABLE channel ADD COLUMN members_json TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE agent ADD COLUMN sandbox_json TEXT NOT NULL DEFAULT '{}'",
 )
-
 
 class Database:
     def __init__(self, path: str | Path):
@@ -145,7 +146,47 @@ class Database:
                 "INSERT INTO message_fts (text, channel_id, author_id, message_id)"
                 " SELECT text, channel_id, author_id, id FROM message"
             )
+        self._migrate_task_table()
         self.conn.commit()
+
+    def _migrate_task_table(self) -> None:
+        row = self.conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='task'"
+        ).fetchone()
+        if row is None or "in_review" in row["sql"]:
+            return
+        self.conn.executescript(
+            """
+            DROP INDEX IF EXISTS idx_task_status;
+            CREATE TABLE task_v2 (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              title TEXT NOT NULL,
+              description TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL DEFAULT 'todo'
+                CHECK(status IN ('todo','in_progress','in_review','done','cancelled')),
+              parent_task_id INTEGER,
+              assignee_type TEXT CHECK(assignee_type IN ('human','agent')),
+              assignee_id TEXT,
+              channel_id TEXT,
+              thread_id INTEGER,
+              created_by TEXT NOT NULL DEFAULT 'humano',
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT,
+              result_text TEXT
+            );
+            INSERT INTO task_v2 (id, title, description, status, assignee_type, assignee_id,
+                                 channel_id, thread_id, created_by, created_at, updated_at, result_text)
+            SELECT id, title, description,
+                   CASE status WHEN 'open' THEN 'todo' WHEN 'claimed' THEN 'in_progress' ELSE status END,
+                   assignee_type, assignee_id, channel_id, thread_id, created_by,
+                   created_at, updated_at, result_text
+            FROM task;
+            DROP TABLE task;
+            ALTER TABLE task_v2 RENAME TO task;
+            CREATE INDEX idx_task_status ON task(status, id);
+            CREATE INDEX idx_task_parent ON task(parent_task_id);
+            """
+        )
 
     @contextmanager
     def tx(self):
@@ -180,7 +221,7 @@ class Database:
     @staticmethod
     def _upsert_agent(conn: sqlite3.Connection, a: AgentConfig) -> None:
         conn.execute(
-            f"INSERT OR REPLACE INTO agent ({AGENT_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT OR REPLACE INTO agent ({AGENT_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 a.name,
                 a.runtime,
@@ -195,6 +236,7 @@ class Database:
                 a.server_port,
                 a.wake_url,
                 a.budget_usd,
+                json.dumps(a.sandbox),
             ),
         )
 
@@ -270,6 +312,7 @@ class Database:
             server_port=row["server_port"],
             wake_url=row["wake_url"],
             budget_usd=row["budget_usd"],
+            sandbox=json.loads(row["sandbox_json"]) if "sandbox_json" in row.keys() else {},
         )
 
     def list_agents(self) -> list[sqlite3.Row]:
@@ -543,24 +586,39 @@ class Database:
 
     def get_task(self, task_id: int) -> sqlite3.Row | None:
         return self.conn.execute(
-            "SELECT * FROM task WHERE id = ?", (task_id,)
+            "SELECT t.*, (SELECT COUNT(*) FROM task s WHERE s.parent_task_id = t.id)"
+            " AS subtask_count FROM task t WHERE t.id = ?",
+            (task_id,),
         ).fetchone()
 
     def list_tasks(self, status: str | None = None) -> list[sqlite3.Row]:
+        base = (
+            "SELECT t.*, (SELECT COUNT(*) FROM task s WHERE s.parent_task_id = t.id)"
+            " AS subtask_count FROM task t"
+        )
         if status:
             return self.conn.execute(
-                "SELECT * FROM task WHERE status = ? ORDER BY id", (status,)
+                base + " WHERE t.status = ? ORDER BY t.id", (status,)
             ).fetchall()
-        return self.conn.execute("SELECT * FROM task ORDER BY id").fetchall()
+        return self.conn.execute(base + " ORDER BY t.id").fetchall()
 
     def claim_task(
         self, task_id: int, assignee_type: str, assignee_id: str
     ) -> sqlite3.Row | None:
         with self.tx() as conn:
             cur = conn.execute(
-                "UPDATE task SET status='claimed', assignee_type=?, assignee_id=?,"
-                " updated_at=datetime('now') WHERE id=? AND status='open' RETURNING *",
+                "UPDATE task SET status='in_progress', assignee_type=?, assignee_id=?,"
+                " updated_at=datetime('now') WHERE id=? AND status='todo' RETURNING *",
                 (assignee_type, assignee_id, task_id),
+            )
+            return cur.fetchone()
+
+    def review_task(self, task_id: int) -> sqlite3.Row | None:
+        with self.tx() as conn:
+            cur = conn.execute(
+                "UPDATE task SET status='in_review', updated_at=datetime('now')"
+                " WHERE id=? AND status='in_progress' RETURNING *",
+                (task_id,),
             )
             return cur.fetchone()
 
@@ -570,7 +628,23 @@ class Database:
         with self.tx() as conn:
             cur = conn.execute(
                 "UPDATE task SET status=?, result_text=?, updated_at=datetime('now')"
-                " WHERE id=? AND status IN ('open','claimed') RETURNING *",
+                " WHERE id=? AND status IN ('todo','in_progress','in_review') RETURNING *",
                 (status, result_text, task_id),
             )
             return cur.fetchone()
+
+    def list_subtasks(self, parent_id: int) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM task WHERE parent_task_id = ? ORDER BY id", (parent_id,)
+        ).fetchall()
+
+    def create_subtask(
+        self, parent_id: int, title: str, description: str = "", channel_id: str | None = None
+    ) -> int:
+        with self.tx() as conn:
+            cur = conn.execute(
+                "INSERT INTO task (title, description, channel_id, parent_task_id)"
+                " VALUES (?,?,?,?)",
+                (title, description, channel_id, parent_id),
+            )
+            return int(cur.lastrowid)

@@ -13,20 +13,24 @@ from .runtimes import get_runtime
 log = logging.getLogger("mi_raft.runner")
 
 
+GLOBAL_MAX_INFLIGHT = 4
+
+
 async def runner_loop(db: Database, poll_s: float = 0.5) -> None:
+    inflight: set[asyncio.Task] = set()
     while True:
-        try:
-            run = db.claim_next_run()
-        except Exception:
-            log.exception("Error reclamando run de la cola")
-            run = None
+        inflight = {t for t in inflight if not t.done()}
+        run = None
+        if len(inflight) < GLOBAL_MAX_INFLIGHT:
+            try:
+                run = db.claim_next_run()
+            except Exception:
+                log.exception("Error reclamando run de la cola")
         if run is None:
             await asyncio.sleep(poll_s)
             continue
-        try:
-            await execute_run(db, run)
-        except Exception:
-            log.exception("Error ejecutando run %s", run["id"])
+        task = asyncio.get_running_loop().create_task(execute_run(db, run))
+        inflight.add(task)
 
 
 async def execute_run(db: Database, run) -> None:

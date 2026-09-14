@@ -24,6 +24,7 @@ class AgentConfig:
     server_port: int | None = None
     wake_url: str | None = None
     budget_usd: float | None = None
+    sandbox: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -106,6 +107,11 @@ def load_config(path: str | Path) -> Config:
                 server_port=item.get("server_port"),
                 wake_url=item.get("wake_url"),
                 budget_usd=item.get("budget_usd"),
+                sandbox=(
+                    {"enable": True}
+                    if item.get("sandbox") is True
+                    else (item.get("sandbox") or {})
+                ),
             )
         )
     if not agents:

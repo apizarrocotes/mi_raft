@@ -9,6 +9,13 @@ defaults:
   max_concurrent: 1
   timeout_s: 600
 
+# Por agente (opcionales):
+#   budget_usd: 0.50        # límite de gasto por turno (claude: --max-budget-usd)
+#   sandbox:
+#     enable: true          # ejecuta el CLI dentro de bwrap (si está instalado)
+#     ro: [/datos/lectura]  # binds adicionales de solo lectura
+#     rw: [/datos/escritura]
+
 agents:
   - name: opencode
     runtime: opencode

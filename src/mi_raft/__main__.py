@@ -289,6 +289,9 @@ def cmd_task(args) -> None:
     elif sub == "claim":
         out = _http_json("POST", f"{url}/tasks/{args.id}/claim", {"agent": args.agent}, key=_api_key(args))
         print(f"Task {args.id} reclamada por {args.agent} (mensaje {out['message_id']})")
+    elif sub == "review":
+        _http_json("POST", f"{url}/tasks/{args.id}/review", {}, key=_api_key(args))
+        print(f"Task {args.id} in_review")
     elif sub == "done":
         _http_json("POST", f"{url}/tasks/{args.id}/done", {"result": args.result}, key=_api_key(args))
         print(f"Task {args.id} done")
@@ -358,7 +361,10 @@ def main(argv=None) -> None:
     p2.set_defaults(func=cmd_task)
 
     p2 = task_sub.add_parser("list", help="lista tasks")
-    p2.add_argument("--status", default=None, choices=["open", "claimed", "done", "cancelled"])
+    p2.add_argument(
+        "--status", default=None,
+        choices=["todo", "in_progress", "in_review", "done", "cancelled"],
+    )
     p2.set_defaults(func=cmd_task)
 
     p2 = task_sub.add_parser("show", help="detalle de una task")
@@ -373,6 +379,10 @@ def main(argv=None) -> None:
     p2 = task_sub.add_parser("done", help="marca una task como done")
     p2.add_argument("id", type=int)
     p2.add_argument("-r", "--result", default=None)
+    p2.set_defaults(func=cmd_task)
+
+    p2 = task_sub.add_parser("review", help="marca una task in_progress como in_review")
+    p2.add_argument("id", type=int)
     p2.set_defaults(func=cmd_task)
 
     p2 = task_sub.add_parser("cancel", help="cancela una task")

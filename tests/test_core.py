@@ -216,10 +216,10 @@ class TestTasks:
         db = make_db(tmp_path)
         tid = db.create_task("Título", "Descripción", "demo")
         t = db.get_task(tid)
-        assert t["status"] == "open"
+        assert t["status"] == "todo"
         claimed = db.claim_task(tid, "agent", "alpha")
         assert claimed is not None
-        assert claimed["status"] == "claimed"
+        assert claimed["status"] == "in_progress"
         assert db.claim_task(tid, "agent", "beta") is None
         assert db.finish_task(tid, "done", "hecho") is not None
         assert db.get_task(tid)["result_text"] == "hecho"
@@ -360,7 +360,7 @@ class TestTaskApi:
         assert tid == 1
 
         task = client.get(f"/tasks/{tid}").json()
-        assert task["status"] == "claimed"
+        assert task["status"] == "in_progress"
         assert task["assignee_id"] == "alpha"
         assert task["thread_id"] is not None
 
@@ -951,3 +951,161 @@ class TestActivityAndDms:
         assert json.loads(body)["event"] == "message.created"
         assert client.delete(f"/webhooks/{created['id']}").status_code == 200
         srv.shutdown()
+
+
+class TestTasksV2:
+    def test_status_flow_with_review(self, tmp_path):
+        db = make_db(tmp_path)
+        tid = db.create_task("Flujo completo", "", "demo")
+        assert db.get_task(tid)["status"] == "todo"
+        claimed = db.claim_task(tid, "agent", "alpha")
+        assert claimed["status"] == "in_progress"
+        rev = db.review_task(tid)
+        assert rev["status"] == "in_review"
+        assert db.review_task(tid) is None
+        assert db.finish_task(tid, "done", "aprobado") is not None
+        assert db.get_task(tid)["result_text"] == "aprobado"
+
+    def test_migration_from_open_claimed(self, tmp_path):
+        import sqlite3
+
+        p = tmp_path / "old.db"
+        conn = sqlite3.connect(p)
+        conn.executescript(
+            """
+            CREATE TABLE task (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL DEFAULT 'open'
+                CHECK(status IN ('open','claimed','done','cancelled')),
+              assignee_type TEXT, assignee_id TEXT, channel_id TEXT, thread_id INTEGER,
+              created_by TEXT NOT NULL DEFAULT 'humano',
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT, result_text TEXT
+            );
+            INSERT INTO task (title, status) VALUES ('vieja open', 'open');
+            INSERT INTO task (title, status) VALUES ('vieja claimed', 'claimed');
+            """
+        )
+        conn.commit()
+        conn.close()
+        db = Database(p)
+        statuses = {r["title"]: r["status"] for r in db.list_tasks()}
+        assert statuses["vieja open"] == "todo"
+        assert statuses["vieja claimed"] == "in_progress"
+
+    def test_subtasks(self, tmp_path):
+        db = make_db(tmp_path)
+        parent = db.create_task("Objetivo grande", "", "demo")
+        db.create_subtask(parent, "pieza 1", "", "demo")
+        db.create_subtask(parent, "pieza 2", "", "demo")
+        subs = db.list_subtasks(parent)
+        assert [s["title"] for s in subs] == ["pieza 1", "pieza 2"]
+        listing = {t["id"]: t for t in db.list_tasks()}
+        assert listing[parent]["subtask_count"] == 2
+
+    def test_breakdown_endpoint(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from mi_raft.server import create_app
+        from mi_raft.runtimes import BaseRuntime, RunResult, register_runtime
+
+        class FakeSplit(BaseRuntime):
+            name = "fake-split"
+            def build_args(self, agent, session_id): return ["true"]
+            def parse_output(self, stdout): return RunResult(None, "")
+            async def run_turn(self, agent, prompt, session_id, timeout_s):
+                assert "JSON" in prompt
+                return RunResult(None, '[{"title": "pieza A", "description": "x"}, {"title": "pieza B"}]')
+
+        register_runtime(FakeSplit())
+        cfg = make_config(
+            [AgentConfig(name="splitter", runtime="fake-split", work_dir="/tmp")]
+        )
+        cfg.server.db = str(tmp_path / "raft.db")
+        db = make_db(tmp_path, cfg.agents)
+        client = TestClient(create_app(cfg, db))
+        r = client.post(
+            "/tasks/breakdown",
+            json={"goal": "lanzar la web", "agent": "splitter", "channel": "demo"},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data["subtasks"]) == 2
+        parent = client.get(f"/tasks/{data['parent_id']}").json()
+        assert parent["title"] == "lanzar la web"
+        assert parent["subtask_count"] == 2
+
+
+class TestConcurrentRunner:
+    def test_two_agents_run_in_parallel(self, tmp_path):
+        import time as _time
+
+        db = make_db(
+            tmp_path,
+            [
+                AgentConfig(name="a1", runtime="fake-slow", work_dir="/tmp"),
+                AgentConfig(name="a2", runtime="fake-slow", work_dir="/tmp"),
+            ],
+        )
+
+        from mi_raft.runtimes import BaseRuntime, RunResult, register_runtime
+
+        class FakeSlow(BaseRuntime):
+            name = "fake-slow"
+            def build_args(self, agent, session_id): return ["true"]
+            def parse_output(self, stdout): return RunResult(None, "ok")
+            async def run_turn(self, agent, prompt, session_id, timeout_s):
+                await asyncio.sleep(0.6)
+                return RunResult(None, "ok")
+
+        register_runtime(FakeSlow())
+        db.insert_message("demo", "human", "apc", "@a1 trabaja y @a2 también")
+        runs = route_message(db, 1)
+        assert len(runs) == 2
+
+        async def drive():
+            from mi_raft.runner import runner_loop
+
+            task = asyncio.get_running_loop().create_task(runner_loop(db, poll_s=0.1))
+            await asyncio.sleep(1.4)
+            task.cancel()
+
+        t0 = _time.monotonic()
+        asyncio.run(drive())
+        elapsed = _time.monotonic() - t0
+        done = db.conn.execute(
+            "SELECT COUNT(*) AS n FROM run WHERE status='done'"
+        ).fetchone()["n"]
+        assert done == 2
+        assert elapsed < 1.9
+
+
+class TestSandbox:
+    def test_build_sandbox_cmd_without_bwrap(self, tmp_path):
+        from mi_raft.runtimes.base import build_sandbox_cmd
+
+        args = build_sandbox_cmd(tmp_path, {"enable": True}, ["echo", "hi"])
+        assert args == ["echo", "hi"]
+
+    def test_build_sandbox_cmd_with_bwrap(self, tmp_path, monkeypatch):
+        import mi_raft.runtimes.base as base
+
+        fake = tmp_path / "bwrap"
+        fake.write_text("#!/bin/sh\n")
+        fake.chmod(0o755)
+        monkeypatch.setattr(base.shutil, "which", lambda name: str(fake))
+        cmd = base.build_sandbox_cmd(tmp_path, {"enable": True, "rw": ["/datos"]}, ["claude", "-p"])
+        assert cmd[0] == str(fake)
+        assert "--tmpfs" in cmd
+        assert str(tmp_path) in cmd
+        assert cmd[-2:] == ["claude", "-p"]
+        assert "/datos" in cmd
+
+    def test_sandbox_disabled_by_default(self):
+        from mi_raft.config import AgentConfig
+
+        a = AgentConfig(name="x", runtime="claude", work_dir="/tmp")
+        assert a.sandbox == {}
+        b = AgentConfig(name="y", runtime="claude", work_dir="/tmp", sandbox={"enable": True})
+        assert b.sandbox == {"enable": True}

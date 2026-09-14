@@ -112,7 +112,10 @@
   th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
   .badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
   .badge.open { background: #33415a; color: var(--text); }
+  .badge.todo { background: #33415a; color: var(--text); }
   .badge.claimed { background: var(--accent2); color: #0f1419; }
+  .badge.in_progress { background: var(--accent2); color: #0f1419; }
+  .badge.in_review { background: var(--human); color: #0f1419; }
   .badge.done { background: var(--ok); color: #0f1419; }
   .badge.cancelled { background: var(--danger); color: #0f1419; }
   #overlay {
@@ -766,27 +769,47 @@ async function renderTasks() {
   const agents = S.agents;
   const opts = ['<option value="">— sin asignar —</option>']
     .concat(agents.map(a => `<option value="${esc(a.id)}">@${esc(a.id)}</option>`)).join("");
+  const cols = ["todo", "in_progress", "in_review", "done", "cancelled"];
+  const byStatus = {};
+  for (const t of tasks) (byStatus[t.status] ??= []).push(t);
+  const board = cols.map(st => `
+    <div style="flex:1;min-width:150px">
+      <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">
+        ${st.replace("_", " ")} (${(byStatus[st] || []).length})
+      </div>
+      ${(byStatus[st] || []).map(t => `
+        <div class="cardbox" style="margin-bottom:8px;padding:10px">
+          <div><b>#${t.id}</b> ${esc(t.title)}</div>
+          ${t.assignee_id ? `<div style="color:var(--muted);font-size:11px">→ ${esc(t.assignee_id)}</div>` : ""}
+          ${(t.subtask_count ?? 0) ? `<div style="color:var(--muted);font-size:11px">${t.subtask_count} subtasks</div>` : ""}
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+            ${st === "in_progress" ? `<button class="btn mini ghost" data-review="${t.id}">review</button>` : ""}
+            ${["todo", "in_progress", "in_review"].includes(st) ? `<button class="btn mini ghost" data-done="${t.id}">done</button>
+            <button class="btn mini ghost" data-cancel="${t.id}">cancel</button>` : ""}
+          </div>
+        </div>`).join("") || '<div style="color:var(--border);font-size:12px">—</div>'}
+    </div>`).join("");
   const rows = tasks.map(t => `
     <tr>
-      <td style="color:var(--muted)">#${t.id}</td>
-      <td><div>${esc(t.title)}</div>${t.description ? `<div style="color:var(--muted);font-size:12px">${esc(t.description)}</div>` : ""}</td>
+      <td style="color:var(--muted)">#${t.id}${t.parent_task_id ? `↳${t.parent_task_id}` : ""}</td>
+      <td><div>${esc(t.title)}</div>${t.description ? `<div style="color:var(--muted);font-size:12px">${esc(t.description.slice(0, 100))}</div>` : ""}</td>
       <td><span class="badge ${t.status}">${t.status}</span></td>
       <td>${t.assignee_id ? esc(t.assignee_type) + ":" + esc(t.assignee_id) : "—"}</td>
       <td>${t.channel_id ? "#" + esc(t.channel_id) : "—"}</td>
-      <td>${(t.status === "open" || t.status === "claimed") ? `
-        <button class="btn mini ghost" data-done="${t.id}">done</button>
-        <button class="btn mini ghost" data-cancel="${t.id}">cancel</button>` : ""}</td>
     </tr>`).join("");
   view.innerHTML = `
     <div class="tasks-form">
       <input id="task-title" placeholder="Nueva task…">
       <select id="task-assignee">${opts}</select>
       <button class="btn" id="task-create">Crear</button>
+      <button class="btn ghost" id="task-breakdown">🪄 Desglosar objetivo con un agente</button>
     </div>
-    <table>
-      <tr><th>id</th><th>task</th><th>estado</th><th>asignada a</th><th>canal</th><th></th></tr>
-      ${rows || '<tr><td colspan="6" class="empty">Sin tasks</td></tr>'}
-    </table>`;
+    <div style="display:flex;gap:10px;margin-bottom:16px;overflow-x:auto">${board}</div>
+    <details><summary style="cursor:pointer;color:var(--muted)">vista tabla</summary>
+    <table style="margin-top:8px">
+      <tr><th>id</th><th>task</th><th>estado</th><th>asignada a</th><th>canal</th></tr>
+      ${rows || '<tr><td colspan="5" class="empty">Sin tasks</td></tr>'}
+    </table></details>`;
   $("task-create").onclick = async () => {
     const title = $("task-title").value.trim();
     if (!title) return;
@@ -794,6 +817,23 @@ async function renderTasks() {
     await api("/tasks", { method: "POST", body: JSON.stringify({ title, channel: S.channel, assignee }) }).catch(e => alert(e.message));
     renderTasks();
   };
+  $("task-breakdown").onclick = async () => {
+    const goal = prompt("Objetivo a desglosar en subtasks:");
+    if (!goal) return;
+    const agent = prompt(`¿Qué agente propone el desglose? (${agents.map(a => a.id).join(", ")})`);
+    if (!agent) return;
+    try {
+      const r = await api("/tasks/breakdown", {
+        method: "POST",
+        body: JSON.stringify({ goal, agent: agent.replace("@", ""), channel: S.channel }),
+      });
+      showToast(`Desglose creado: task #${r.parent_id} con ${r.subtasks.length} subtasks`, () => renderTasks());
+      renderTasks();
+    } catch (e) { if (e.message !== "401") alert(e.message); }
+  };
+  view.querySelectorAll("[data-review]").forEach(b => b.onclick = async () => {
+    await api(`/tasks/${b.dataset.review}/review`, { method: "POST", body: "{}" }); renderTasks();
+  });
   view.querySelectorAll("[data-done]").forEach(b => b.onclick = async () => {
     await api(`/tasks/${b.dataset.done}/done`, { method: "POST", body: "{}" }); renderTasks();
   });
