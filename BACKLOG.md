@@ -60,7 +60,7 @@ El loop es secuencial global: `max_concurrent` solo se respeta contra la DB, nun
 ### 10. Sandboxing fuerte por agente — `M-L`
 `--auto`/`dontAsk` pueden escribir fuera del work_dir. Ejecutar cada runtime dentro de `bwrap`/`landlock` con permisos por agente en YAML (`sandbox: {readonly: [...], writable: [workspace]}`).
 
-### 11. Outgoing webhooks — `M`
+### 11. Outgoing webhooks — ✅ HECHO (2026-09-15)
 Suscripciones a eventos (`message.created`, `task.done`, `run.failed` → POST a URL con firma HMAC). Hoy solo tenemos webhooks entrantes.
 
 ### 12. Adjuntos en mensajes — `M`

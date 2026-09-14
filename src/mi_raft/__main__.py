@@ -402,7 +402,8 @@ def main(argv=None) -> None:
     p.add_argument("--config", default=argparse.SUPPRESS)
     p.set_defaults(func=cmd_search)
 
-    p = sub.add_parser("team", help="gestión de equipos")    p.add_argument("--url", default=None)
+    p = sub.add_parser("team", help="gestión de equipos")
+    p.add_argument("--url", default=None)
     team_sub = p.add_subparsers(dest="team_cmd", required=True)
     p2 = team_sub.add_parser("create", help="crea un equipo aislado (server propio)")
     p2.add_argument("name")

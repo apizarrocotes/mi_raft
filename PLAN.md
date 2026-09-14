@@ -1,9 +1,9 @@
 # PLAN — mi_raft
 
 ## Current State
-- **Activo ahora**: backlog generado (BACKLOG.md) — análisis de brechas vs Raft/multica priorizado.
-- **Bloqueado**: nada.
-- **Siguiente paso**: elegir sprint del roadmap de BACKLOG.md (sugerido: sprint 1 con quick wins: costes, estados de agente, markdown, edición de agentes, CI).
+- **Activo ahora**: Sprints 1-3 del BACKLOG completados y publicados (noche 2026-09-14/15). 53 tests, instancias principal+beta en vivo.
+- **Bloqueado**: sandboxing real inactivo en esta máquina (bwrap no instalado y sudo requiere contraseña) — el código está listo, solo `sudo apt install bubblewrap`.
+- **Siguiente paso**: del backlog — CI real (token con scope workflow), telemetría de ejecución (run messages), push notifications (etapa 2), multi-máquina.
 
 ## F0 — Investigación ✅ (2026-09-14)
 - [x] Referencias estudiadas (multica, raft-external-agents, omnigent); headless de los 3 CLIs verificado.
