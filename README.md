@@ -80,3 +80,14 @@ Prueba de concepto funcional. El camino completo hacia un producto de nivel Raft
 ## Licencia
 
 Pendiente de definir por el autor.
+
+## CI
+
+La plantilla del workflow está en [`docs/ci.yml.example`](docs/ci.yml.example). Para activarla:
+
+```bash
+mkdir -p .github/workflows && cp docs/ci.yml.example .github/workflows/ci.yml
+git add .github/workflows/ci.yml && git commit -m "CI" && git push
+```
+
+(Requiere un token con scope `workflow`: `gh auth refresh -s workflow`.)
