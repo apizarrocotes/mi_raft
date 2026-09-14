@@ -1,9 +1,9 @@
 # PLAN — mi_raft
 
 ## Current State
-- **Activo ahora**: F5 ✅ completa y validada (2026-09-14): equipos aislados, alta dinámica, onboarding, organigrama, workspace compartido.
+- **Activo ahora**: memoria completa para agentes dinámicos ✅ (2026-09-14): auto memory_file en POST /agents, ver/editar por API y UI.
 - **Bloqueado**: nada.
-- **Siguiente paso**: uso real. Candidatos: editar agentes desde la UI (PATCH ya existe), deep-links, notificaciones, sandboxing fuerte, daemon multi-máquina.
+- **Siguiente paso**: push pendiente de confirmación del usuario; luego uso real. Candidatos: editar agentes (instructions/model) desde la UI, notificaciones, sandboxing fuerte.
 
 ## F0 — Investigación ✅ (2026-09-14)
 - [x] Referencias estudiadas (multica, raft-external-agents, omnigent); headless de los 3 CLIs verificado.

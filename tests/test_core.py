@@ -558,6 +558,7 @@ class TestTeamApi:
         ws.mkdir()
         cfg = make_config()
         cfg.workspace = str(ws)
+        cfg.server.db = str(tmp_path / "raft.db")
         db = make_db(tmp_path)
         client = TestClient(create_app(cfg, db))
 
@@ -621,3 +622,71 @@ class TestTeamApi:
         client = TestClient(create_app(cfg, make_db(tmp_path)))
         meta = client.get("/meta").json()
         assert meta["team"] == "beta"
+
+
+class TestMemoryApi:
+    def test_auto_memory_on_dynamic_agent(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from mi_raft.server import create_app
+
+        cfg = make_config()
+        cfg.workspace = "/tmp"
+        cfg.server.db = str(tmp_path / "raft.db")
+        db = make_db(tmp_path)
+        client = TestClient(create_app(cfg, db))
+
+        r = client.post(
+            "/agents", json={"name": "escritor", "runtime": "opencode"}
+        )
+        assert r.status_code == 200
+        mem_path = r.json()["memory_file"]
+        assert "memory/escritor.md" in mem_path
+        assert "Memoria de escritor" in (tmp_path / "raft.db").parent.joinpath("memory/escritor.md").read_text()
+
+        g = client.get("/agents/escritor/memory").json()
+        assert g["memory_file"] == mem_path
+        assert "Memoria de escritor" in g["content"]
+
+        p = client.put(
+            "/agents/escritor/memory", json={"content": "Regla: entregar en el workspace."}
+        ).json()
+        assert p["bytes"] > 0
+        assert client.get("/agents/escritor/memory").json()["content"] == "Regla: entregar en el workspace."
+
+        assert client.get("/agents/no-existe/memory").status_code == 404
+
+    def test_put_creates_memory_for_agent_without_one(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from mi_raft.server import create_app
+
+        db = make_db(tmp_path)
+        cfg = make_config()
+        cfg.server.db = str(tmp_path / "raft.db")
+        client = TestClient(create_app(cfg, db))
+        r = client.put(
+            "/agents/alpha/memory", json={"content": "memoria retroactiva"}
+        )
+        assert r.status_code == 200
+        mem_file = r.json()["memory_file"]
+        assert "memory/alpha.md" in mem_file
+        agent = db.get_agent("alpha")
+        assert agent.memory_file == mem_file
+        assert "memoria retroactiva" in client.get("/agents/alpha/memory").json()["content"]
+
+    def test_explicit_memory_file_respected(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from mi_raft.server import create_app
+
+        cfg = make_config()
+        cfg.workspace = "/tmp"
+        cfg.server.db = str(tmp_path / "raft.db")
+        client = TestClient(create_app(cfg, make_db(tmp_path)))
+        r = client.post(
+            "/agents",
+            json={"name": "con-ruta", "runtime": "pi", "memory_file": str(tmp_path / "mem.md")},
+        )
+        assert r.json()["memory_file"] == str(tmp_path / "mem.md")
+        assert (tmp_path / "mem.md").exists()

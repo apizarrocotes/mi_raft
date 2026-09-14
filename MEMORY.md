@@ -51,3 +51,9 @@
 - **argparse**: para que `--config` funcione tanto global como por subcomando, el duplicado en el subparser lleva `default=argparse.SUPPRESS` (si no, el default del subparser pisa el global). prog corregido a "miraft".
 - Los agentes dinámicos NO pueden ser runtime `external` por API (necesitan wake_url en YAML) — validación en POST /agents.
 - El agente `dev` dinámico respetó el workspace (opencode + repo git propio del workspace ayudan a fijar el "proyecto").
+
+## 2026-09-14 — Sesión 6: memoria para agentes dinámicos
+- **Hueco cerrado**: los agentes creados por API/UI nacían SIN memoria. Ahora POST /agents deriva `memory_file` por defecto del directorio de la DB (`<dir-db>/memory/<nombre>.md`) y crea el fichero con cabecera. `PUT /agents/{id}/memory` es retroactivo: si el agente no tenía memoria, se la asigna.
+- API de memoria: GET/PUT `/agents/{id}/memory` (contenido del fichero); la UI (pestaña Equipo, clic en un agente) lo edita.
+- **Lección de tests**: los tests que crean agentes dinámicos DEBEN fijar `cfg.server.db` al tmp — con el default (`data/raft.db` relativo a CWD) derivan memoria hacia `data/memory/` REAL y pueden pisar la memoria de agentes productivos (lo detectamos con alpha.md/nuevo-agente.md).
+- La plantilla de team scaffold ya daba memoria al onboarding; ahora cualquier agente nuevo de cualquier equipo la tiene sin configurar nada.

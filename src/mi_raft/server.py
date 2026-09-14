@@ -57,6 +57,7 @@ class AgentIn(BaseModel):
     instructions: str = ""
     model: str | None = None
     permissions: dict = field(default_factory=dict)
+    memory_file: str | None = None
 
 
 class AgentPatchIn(BaseModel):
@@ -64,6 +65,10 @@ class AgentPatchIn(BaseModel):
     model: str | None = None
     memory_file: str | None = None
     permissions: dict | None = None
+
+
+class MemoryIn(BaseModel):
+    content: str
 
 
 def create_app(cfg: Config, db: Database) -> FastAPI:
@@ -286,6 +291,7 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
             raise HTTPException(422, "work_dir obligatorio (este equipo no tiene workspace definido)")
         from .config import AgentConfig
 
+        memory_file = body.memory_file or default_memory_file(body.name)
         agent = AgentConfig(
             name=body.name,
             runtime=body.runtime,
@@ -293,9 +299,48 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
             instructions=body.instructions,
             model=body.model,
             permissions=body.permissions,
+            memory_file=memory_file,
         )
         db.create_agent(agent)
-        return {"id": agent.name, "work_dir": agent.work_dir}
+        ensure_memory_file(memory_file, agent.name)
+        return {"id": agent.name, "work_dir": agent.work_dir, "memory_file": agent.memory_file}
+
+    def default_memory_file(name: str) -> str:
+        db_dir = Path(cfg.server.db).expanduser().resolve().parent
+        return str(db_dir / "memory" / f"{name}.md")
+
+    def ensure_memory_file(memory_file: str, name: str) -> None:
+        path = Path(memory_file).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text(
+                f"# Memoria de {name}\n\n"
+                "(El agente edita este fichero para guardar aprendizajes durables.)\n"
+            )
+
+    @app.get("/agents/{agent_id}/memory", dependencies=[Depends(require_key)])
+    def get_memory(agent_id: str):
+        row = db.get_agent_row(agent_id)
+        if row is None:
+            raise HTTPException(404, f"Agente {agent_id} no existe")
+        if not row["memory_file"]:
+            return {"memory_file": None, "content": None}
+        path = Path(row["memory_file"]).expanduser()
+        content = path.read_text(errors="replace") if path.exists() else ""
+        return {"memory_file": row["memory_file"], "content": content}
+
+    @app.put("/agents/{agent_id}/memory", dependencies=[Depends(require_key)])
+    def put_memory(agent_id: str, body: MemoryIn):
+        row = db.get_agent_row(agent_id)
+        if row is None:
+            raise HTTPException(404, f"Agente {agent_id} no existe")
+        memory_file = row["memory_file"] or default_memory_file(agent_id)
+        if memory_file != row["memory_file"]:
+            db.update_agent(agent_id, {"memory_file": memory_file})
+        ensure_memory_file(memory_file, agent_id)
+        path = Path(memory_file).expanduser()
+        path.write_text(body.content)
+        return {"memory_file": memory_file, "bytes": len(body.content)}
 
     @app.patch("/agents/{agent_id}", dependencies=[Depends(require_key)])
     def patch_agent(agent_id: str, body: AgentPatchIn):

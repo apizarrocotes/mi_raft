@@ -414,7 +414,7 @@ async function renderTeam() {
         <h3>Organigrama (handoffs permitidos)</h3>
         ${graph}
       </div>
-      <div class="cardbox">
+      <div class="cardbox" id="team-right">
         <h3>Dar de alta un agente</h3>
         <input id="ag-name" placeholder="nombre (ej. revisor)">
         <select id="ag-runtime">${rtOpts}</select>
@@ -422,18 +422,18 @@ async function renderTeam() {
         <div style="color:var(--muted);font-size:11px;margin-bottom:8px" id="ag-workdir"></div>
         <button class="btn" id="ag-create">Crear agente</button>
         <div style="margin-top:14px">
-          <h3 style="margin-top:8px">Agentes del equipo</h3>
+          <h3 style="margin-top:8px">Agentes del equipo <span style="font-weight:400;text-transform:none">(clic para su memoria)</span></h3>
           ${agents.map(a => `
-            <div class="agent-row">
+            <div class="agent-row" data-agent="${esc(a.id)}" style="cursor:pointer">
               <span><b>${esc(a.id)}</b> <span class="rt">${esc(a.runtime)}</span></span>
-              <span class="rt">${esc((a.work_dir || "").split("/").slice(-1)[0])}</span>
+              <span class="rt">${a.memory_file ? "🧠" : "—"}</span>
             </div>`).join("")}
         </div>
       </div>
     </div>`;
-  const metaTeam = S.team;
-  const wd = S.workspace;
-  $("ag-workdir").textContent = wd ? "work_dir por defecto: " + wd : "sin workspace por defecto en raft.yaml";
+  $("ag-workdir").textContent = S.workspace
+    ? "work_dir por defecto: " + S.workspace
+    : "sin workspace por defecto en raft.yaml";
   $("ag-create").onclick = async () => {
     const name = $("ag-name").value.trim();
     if (!name) return;
@@ -448,6 +448,33 @@ async function renderTeam() {
       renderTeam(); renderAgents();
     } catch (e) { if (e.message !== "401") alert(e.message); }
   };
+  view.querySelectorAll("[data-agent]").forEach(row => {
+    row.onclick = () => showMemory(row.dataset.agent).catch(() => {});
+  });
+}
+
+async function showMemory(agentId) {
+  const mem = await api(`/agents/${encodeURIComponent(agentId)}/memory`);
+  const right = $("team-right");
+  if (!right) return;
+  right.innerHTML = `
+    <h3>Memoria de ${esc(agentId)}</h3>
+    <div style="color:var(--muted);font-size:11px;margin-bottom:8px">${esc(mem.memory_file || "sin fichero de memoria — se creará al guardar")}</div>
+    <textarea id="mem-editor" style="min-height:200px;font-family:ui-monospace,monospace">${esc(mem.content ?? "")}</textarea>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn" id="mem-save">Guardar</button>
+      <button class="btn ghost" id="mem-back">Volver</button>
+    </div>`;
+  $("mem-save").onclick = async () => {
+    try {
+      await api(`/agents/${encodeURIComponent(agentId)}/memory`, {
+        method: "PUT",
+        body: JSON.stringify({ content: $("mem-editor").value }),
+      });
+      renderTeam(); renderAgents();
+    } catch (e) { if (e.message !== "401") alert(e.message); }
+  };
+  $("mem-back").onclick = () => renderTeam();
 }
 
 function orgSVG(org) {
