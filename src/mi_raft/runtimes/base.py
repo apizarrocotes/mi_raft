@@ -144,12 +144,17 @@ class BaseRuntime(ABC):
             stdin_task.cancel()
         stderr = await stderr_task
         if proc.returncode != 0:
-            stdout_tail = "".join(stdout_lines)[-600:]
             raise RuntimeError(
-                f"{self.name} salió con código {proc.returncode}: "
-                f"stderr={stderr.strip()[:600] or '(vacío)'} | stdout_tail={stdout_tail}"
+                self.diagnose_failure("".join(stdout_lines), stderr.strip())
             )
         return self.parse_output("".join(stdout_lines))
+
+    def diagnose_failure(self, stdout: str, stderr: str) -> str:
+        stdout_tail = stdout[-600:]
+        return (
+            f"{self.name} salió con código distinto de 0: "
+            f"stderr={stderr[:600] or '(vacío)'} | stdout_tail={stdout_tail}"
+        )
 
     def parse_line(self, line: str, sink) -> None:
         return None

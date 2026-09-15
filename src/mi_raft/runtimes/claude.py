@@ -26,6 +26,17 @@ class ClaudeRuntime(BaseRuntime):
         args += agent.extra_args
         return args
 
+    def diagnose_failure(self, stdout: str, stderr: str) -> str:
+        for line in reversed(stdout.splitlines()):
+            for obj in _claude_events(line):
+                if obj.get("type") == "result" and isinstance(obj.get("result"), str):
+                    status = obj.get("api_error_status")
+                    return (
+                        f"claude error API {status or ''}: {obj['result'][:200]} "
+                        "(la suscripción de este runtime limita el uso)"
+                    )
+        return super().diagnose_failure(stdout, stderr)
+
     def parse_line(self, line: str, sink) -> None:
         for obj in _claude_events(line):
             ev_type = obj.get("type")
