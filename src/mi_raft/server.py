@@ -146,6 +146,11 @@ class TaskIn(BaseModel):
     channel: str | None = None
     assignee: str | None = None
     created_by: str = "humano"
+    phase: str | None = None
+
+
+class TaskDepIn(BaseModel):
+    depends_on: int
 
 
 class TaskClaimIn(BaseModel):
@@ -335,7 +340,7 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
         channel = task.channel.lstrip("#") if task.channel else None
         if channel and not db.channel_exists(channel):
             raise HTTPException(404, f"Canal desconocido: #{channel}")
-        tid = db.create_task(task.title, task.description, channel, task.created_by)
+        tid = db.create_task(task.title, task.description, channel, task.created_by, task.phase)
         claimed = None
         if task.assignee:
             claimed = db.claim_task(tid, "agent", task.assignee)
@@ -353,7 +358,27 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
         t = db.get_task(task_id)
         if t is None:
             raise HTTPException(404, f"Task {task_id} no existe")
-        return dict(t)
+        out = dict(t)
+        out["deps"] = [dict(d) for d in db.task_deps_info(task_id)]
+        return out
+
+    @app.post("/tasks/{task_id}/deps", dependencies=[Depends(require_key)])
+    def add_task_dep(task_id: int, body: TaskDepIn):
+        if db.get_task(task_id) is None or db.get_task(body.depends_on) is None:
+            raise HTTPException(404, "task o dependencia no existe")
+        if not db.add_task_dep(task_id, body.depends_on):
+            raise HTTPException(409, "dependencia duplicada o circular (a sí misma)")
+        return {"task_id": task_id, "depends_on": body.depends_on}
+
+    @app.delete("/tasks/{task_id}/deps/{dep_id}", dependencies=[Depends(require_key)])
+    def remove_task_dep(task_id: int, dep_id: int):
+        with db.tx() as conn:
+            cur = conn.execute(
+                "DELETE FROM task_deps WHERE task_id=? AND depends_on=?", (task_id, dep_id)
+            )
+        if cur.rowcount == 0:
+            raise HTTPException(404, "dependencia no existe")
+        return {"removed": True}
 
     @app.post("/tasks/{task_id}/claim", dependencies=[Depends(require_key)])
     def claim_task(task_id: int, body: TaskClaimIn):

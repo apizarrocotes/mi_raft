@@ -102,21 +102,33 @@ class TestRouting:
         assert runs[0]["trigger_message_id"] == m2
         assert runs[0]["thread_id"] == m1
 
-    def test_human_reply_without_mention_wakes_last_agent(self, tmp_path):
+    def test_human_reply_without_mention_continuity_dm_only(self, tmp_path):
         db = make_db(tmp_path)
+        # canal normal: sin mención NO despierta (M3: solo menciones despiertan)
         root = db.insert_message("demo", "human", "apc", "@alpha empieza")
         route_message(db, root)
-        db.claim_next_run()
-        reply = db.insert_message("demo", "agent", "alpha", "hecho", thread_id=root)
+        c1 = db.claim_next_run()
+        db.finish_run(c1["id"], "done", None, None, "ok", None)
+        db.insert_message("demo", "agent", "alpha", "hecho", thread_id=root)
         follow = db.insert_message("demo", "human", "apc", "¿seguro?", thread_id=root)
-        runs = route_message(db, follow)
+        assert route_message(db, follow) == []
+
+        # DM: la continuidad se mantiene
+        with db.tx() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO channel (id, topic, type, members_json)"
+                " VALUES ('dm-alpha', '', 'dm', '[\"apc\",\"alpha\"]')"
+            )
+        dm_root = db.insert_message("dm-alpha", "human", "apc", "@alpha empieza DM")
+        route_message(db, dm_root)
+        db.claim_next_run()
+        db.insert_message("dm-alpha", "agent", "alpha", "hecho DM", thread_id=dm_root)
+        dm_follow = db.insert_message("dm-alpha", "human", "apc", "¿seguro?", thread_id=dm_root)
+        runs = route_message(db, dm_follow)
         assert len(runs) == 1
-        run = db.conn.execute(
-            "SELECT * FROM run WHERE id=?", (runs[0],)
-        ).fetchone()
+        run = db.conn.execute("SELECT * FROM run WHERE id=?", (runs[0],)).fetchone()
         assert run["agent_id"] == "alpha"
-        assert run["thread_id"] == root
-        assert reply is not None
+        assert run["thread_id"] == dm_root
 
     def test_root_message_without_mention_does_not_wake(self, tmp_path):
         db = make_db(tmp_path)

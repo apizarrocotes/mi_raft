@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS agent (
   status TEXT NOT NULL DEFAULT 'idle'
 );
 
+CREATE TABLE IF NOT EXISTS task_deps (
+  task_id INTEGER NOT NULL,
+  depends_on INTEGER NOT NULL,
+  PRIMARY KEY (task_id, depends_on)
+);
+
 CREATE TABLE IF NOT EXISTS org_edge (
   from_id TEXT NOT NULL,
   to_id TEXT NOT NULL,
@@ -34,6 +40,7 @@ CREATE TABLE IF NOT EXISTS task (
   description TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'todo'
     CHECK(status IN ('todo','in_progress','in_review','done','cancelled')),
+  phase TEXT,
   parent_task_id INTEGER,
   assignee_type TEXT CHECK(assignee_type IN ('human','agent')),
   assignee_id TEXT,
@@ -131,6 +138,7 @@ MIGRATIONS = (
     "ALTER TABLE channel ADD COLUMN members_json TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE agent ADD COLUMN sandbox_json TEXT NOT NULL DEFAULT '{}'",
     "ALTER TABLE agent ADD COLUMN web_search INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE task ADD COLUMN phase TEXT",
     "ALTER TABLE run ADD COLUMN provider TEXT",
     "ALTER TABLE run ADD COLUMN model TEXT",
     "ALTER TABLE agent ADD COLUMN provider TEXT",
@@ -182,6 +190,7 @@ class Database:
               description TEXT NOT NULL DEFAULT '',
               status TEXT NOT NULL DEFAULT 'todo'
                 CHECK(status IN ('todo','in_progress','in_review','done','cancelled')),
+              phase TEXT,
               parent_task_id INTEGER,
               assignee_type TEXT CHECK(assignee_type IN ('human','agent')),
               assignee_id TEXT,
@@ -192,9 +201,9 @@ class Database:
               updated_at TEXT,
               result_text TEXT
             );
-            INSERT INTO task_v2 (id, title, description, status, assignee_type, assignee_id,
+            INSERT INTO task_v2 (id, title, description, phase, status, assignee_type, assignee_id,
                                  channel_id, thread_id, created_by, created_at, updated_at, result_text)
-            SELECT id, title, description,
+            SELECT id, title, description, NULL,
                    CASE status WHEN 'open' THEN 'todo' WHEN 'claimed' THEN 'in_progress' ELSE status END,
                    assignee_type, assignee_id, channel_id, thread_id, created_by,
                    created_at, updated_at, result_text
@@ -481,6 +490,12 @@ class Database:
         ).fetchone()
         return int(row["n"])
 
+    def channel_type(self, channel_id: str) -> str:
+        row = self.conn.execute(
+            "SELECT type FROM channel WHERE id = ?", (channel_id,)
+        ).fetchone()
+        return row["type"] if row else "channel"
+
     def last_agent_in_thread(self, thread_id: int) -> str | None:
         row = self.conn.execute(
             "SELECT author_id FROM message WHERE thread_id = ? AND author_type = 'agent'"
@@ -508,6 +523,16 @@ class Database:
                   WHERE r.status='queued'
                     AND (SELECT COUNT(*) FROM run r2
                          WHERE r2.agent_id=r.agent_id AND r2.status='running') < a.max_concurrent
+                    AND NOT EXISTS (
+                      SELECT 1 FROM task t
+                      WHERE t.thread_id = r.thread_id
+                        AND t.status IN ('todo','in_progress','in_review')
+                        AND EXISTS (
+                          SELECT 1 FROM task_deps d JOIN task dep ON dep.id = d.depends_on
+                          WHERE d.task_id = t.id
+                            AND dep.status IN ('todo','in_progress','in_review')
+                        )
+                    )
                   ORDER BY r.id
                   LIMIT 1
                 )
@@ -621,6 +646,31 @@ class Database:
             (grace_s,),
         ).fetchall()
 
+    def add_task_dep(self, task_id: int, depends_on: int) -> bool:
+        if task_id == depends_on:
+            return False
+        with self.tx() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?,?)",
+                (task_id, depends_on),
+            )
+            return cur.rowcount > 0
+
+    def task_deps_info(self, task_id: int) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT d.depends_on AS id, t.title, t.status FROM task_deps d"
+            " JOIN task t ON t.id = d.depends_on WHERE d.task_id = ? ORDER BY d.depends_on",
+            (task_id,),
+        ).fetchall()
+
+    def task_blocked(self, task_id: int) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM task_deps d JOIN task t ON t.id = d.depends_on"
+            " WHERE d.task_id = ? AND t.status IN ('todo','in_progress','in_review') LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        return row is not None
+
     def agent_models(self, agent_id: str) -> list[sqlite3.Row]:
         return self.conn.execute(
             "SELECT provider, model, COUNT(*) AS runs, SUM(cost_usd) AS cost_usd"
@@ -667,26 +717,32 @@ class Database:
         description: str = "",
         channel_id: str | None = None,
         created_by: str = "humano",
+        phase: str | None = None,
     ) -> int:
         with self.tx() as conn:
             cur = conn.execute(
-                "INSERT INTO task (title, description, channel_id, created_by)"
-                " VALUES (?,?,?,?)",
-                (title, description, channel_id, created_by),
+                "INSERT INTO task (title, description, channel_id, created_by, phase)"
+                " VALUES (?,?,?,?,?)",
+                (title, description, channel_id, created_by, phase),
             )
             return int(cur.lastrowid)
 
     def get_task(self, task_id: int) -> sqlite3.Row | None:
         return self.conn.execute(
             "SELECT t.*, (SELECT COUNT(*) FROM task s WHERE s.parent_task_id = t.id)"
-            " AS subtask_count FROM task t WHERE t.id = ?",
+            " AS subtask_count, (SELECT COUNT(*) FROM task_deps d JOIN task dep"
+            " ON dep.id = d.depends_on WHERE d.task_id = t.id"
+            "   AND dep.status IN ('todo','in_progress','in_review')) AS blocked_count"
+            " FROM task t WHERE t.id = ?",
             (task_id,),
         ).fetchone()
 
     def list_tasks(self, status: str | None = None) -> list[sqlite3.Row]:
         base = (
             "SELECT t.*, (SELECT COUNT(*) FROM task s WHERE s.parent_task_id = t.id)"
-            " AS subtask_count FROM task t"
+            " AS subtask_count, (SELECT COUNT(*) FROM task_deps d JOIN task dep"
+            " ON dep.id = d.depends_on WHERE d.task_id = t.id"
+            "   AND dep.status IN ('todo','in_progress','in_review')) AS blocked_count FROM task t"
         )
         if status:
             return self.conn.execute(

@@ -900,14 +900,16 @@ async function renderTasks() {
   const cols = ["todo", "in_progress", "in_review", "done", "cancelled"];
   const byStatus = {};
   for (const t of tasks) (byStatus[t.status] ??= []).push(t);
+  const phases = [...new Set(tasks.map(t => t.phase).filter(Boolean))];
   const board = cols.map(st => `
     <div style="flex:1;min-width:150px">
       <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">
         ${st.replace("_", " ")} (${(byStatus[st] || []).length})
       </div>
-      ${(byStatus[st] || []).map(t => `
-        <div class="cardbox" style="margin-bottom:8px;padding:10px">
-          <div><b>#${t.id}</b> ${esc(t.title)}</div>
+      ${(byStatus[st] || []).filter(t => !S.phaseFilter || t.phase === S.phaseFilter).map(t => `
+        <div class="cardbox" style="margin-bottom:8px;padding:10px;${t.blocked_count ? "opacity:.55" : ""}">
+          <div><b>#${t.id}</b> ${esc(t.title)}${t.blocked_count ? " 🔒" : ""}</div>
+          ${t.phase ? `<div style="color:var(--accent2);font-size:10px">fase: ${esc(t.phase)}</div>` : ""}
           ${t.assignee_id ? `<div style="color:var(--muted);font-size:11px">→ ${esc(t.assignee_id)}</div>` : ""}
           ${(t.subtask_count ?? 0) ? `<div style="color:var(--muted);font-size:11px">${t.subtask_count} subtasks</div>` : ""}
           <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
@@ -931,6 +933,10 @@ async function renderTasks() {
       <select id="task-assignee">${opts}</select>
       <button class="btn" id="task-create">Crear</button>
       <button class="btn ghost" id="task-breakdown">🪄 Desglosar objetivo con un agente</button>
+      <select id="task-phase-filter" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 8px">
+        <option value="">todas las fases</option>
+        ${phases.map(ph => `<option value="${esc(ph)}" ${S.phaseFilter === ph ? "selected" : ""}>${esc(ph)}</option>`).join("")}
+      </select>
     </div>
     <div style="display:flex;gap:10px;margin-bottom:16px;overflow-x:auto">${board}</div>
     <details><summary style="cursor:pointer;color:var(--muted)">vista tabla</summary>
@@ -945,6 +951,7 @@ async function renderTasks() {
     await api("/tasks", { method: "POST", body: JSON.stringify({ title, channel: S.channel, assignee }) }).catch(e => alert(e.message));
     renderTasks();
   };
+  $("task-phase-filter").onchange = () => { S.phaseFilter = $("task-phase-filter").value || null; renderTasks(); };
   $("task-breakdown").onclick = async () => {
     const goal = prompt("Objetivo a desglosar en subtasks:");
     if (!goal) return;

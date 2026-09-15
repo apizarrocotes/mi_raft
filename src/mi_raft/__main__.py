@@ -304,6 +304,7 @@ def cmd_task(args) -> None:
             "description": args.description or "",
             "channel": args.channel,
             "assignee": args.assignee,
+            "phase": args.phase,
         }
         out = _http_json("POST", f"{url}/tasks", body, key=_api_key(args))
         print(f"Task {out['id']} creada (assignee: {out['assignee'] or '—'})")
@@ -329,6 +330,9 @@ def cmd_task(args) -> None:
     elif sub == "done":
         _http_json("POST", f"{url}/tasks/{args.id}/done", {"result": args.result}, key=_api_key(args))
         print(f"Task {args.id} done")
+    elif sub == "dep":
+        out = _http_json("POST", f"{url}/tasks/{args.id}/deps", {"depends_on": args.depends_on}, key=_api_key(args))
+        print(f"Task {args.id} ahora depende de #{args.depends_on}")
     elif sub == "cancel":
         _http_json("POST", f"{url}/tasks/{args.id}/cancel", {}, key=_api_key(args))
         print(f"Task {args.id} cancelled")
@@ -392,6 +396,12 @@ def main(argv=None) -> None:
     p2.add_argument("-d", "--description", default=None)
     p2.add_argument("-c", "--channel", default=None)
     p2.add_argument("-a", "--assignee", default=None, help="agente asignado (opcional)")
+    p2.add_argument("-p", "--phase", default=None, help="fase (mercado/biblia/borrador/edicion/publicacion)")
+    p2.set_defaults(func=cmd_task)
+
+    p2 = task_sub.add_parser("dep", help="declara que task depende de otra")
+    p2.add_argument("id", type=int)
+    p2.add_argument("depends_on", type=int)
     p2.set_defaults(func=cmd_task)
 
     p2 = task_sub.add_parser("list", help="lista tasks")

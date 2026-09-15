@@ -56,6 +56,7 @@ def route_message(db: Database, message_id: int) -> list[int]:
         not mentioned
         and msg["author_type"] == "human"
         and msg["thread_id"] is not None
+        and db.channel_type(msg["channel_id"]) == "dm"
     ):
         last_agent = db.last_agent_in_thread(msg["thread_id"])
         if last_agent in known:
@@ -117,6 +118,20 @@ def build_prompt(db, agent, channel_id: str, thread_id: int) -> str:
             f"  (devuelve el texto plano de la página)"
         )
     if agent.runtime != "external":
+        delega = [e["to_id"] for e in db.org_edges() if e["from_id"] == agent.name]
+        recibe = [e["from_id"] for e in db.org_edges() if e["to_id"] == agent.name]
+        header += (
+            f"\n\nLÍNEAS DE COMUNICACIÓN (grafo del equipo — respétalas SIEMPRE, "
+            "los handoffs fuera de estas líneas se bloquean automáticamente):"
+            f"\n- Solo puedes encargar trabajo directamente a: "
+            f"{', '.join(delega) if delega else 'nadie directamente'}"
+            f"\n- Reportas y devuelves trabajo a: "
+            f"{', '.join(recibe) if recibe else 'nadie directamente'}"
+            "\n- Si necesitas algo de otro agente fuera de estas líneas, publícalo en "
+            "el canal SIN mención y quien corresponda lo enrutará."
+            "\n- No publiques acuses de recibo sin contenido nuevo; no menciones a "
+            "nadie solo para acusar recibo."
+        )
         port = getattr(db, "server_port", None) or 8420
         header += (
             f"\n\nPublicar mensajes tú misma por la API (updates intermedios): incluye "
