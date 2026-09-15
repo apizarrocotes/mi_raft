@@ -151,12 +151,34 @@ class BaseRuntime(ABC):
 
     @staticmethod
     def _kill_tree(proc: asyncio.subprocess.Process) -> None:
-        try:
-            import os
+        import os
+        import signal
 
+        def descendants(pid: int) -> list[int]:
+            found: list[int] = []
+            for entry in Path("/proc").iterdir():
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    stat = (entry / "stat").read_text()
+                    ppid = int(stat.rsplit(")", 1)[1].split()[1])
+                    if ppid == pid:
+                        found.append(int(entry.name))
+                        found.extend(descendants(int(entry.name)))
+                except (OSError, ValueError, IndexError):
+                    continue
+            return found
+
+        victims = descendants(proc.pid)
+        try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             pass
+        for pid in victims:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
 
 
 def parse_json_lines(stdout: str) -> list[dict]:

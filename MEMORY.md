@@ -79,3 +79,9 @@
 - **DDG antibot**: html.duckduckgo.com da 202+challenge a urllib SIEMPRE y a curl en peticiones repetidas (rate limit por IP). Solución: lite.duckduckgo.com/lite/ por POST (funciona) con fallback a html GET + caché 300s por query. Si se degrada, config con provider brave + brave_key (API de pago con tier gratis).
 - /tools/fetch bloquea localhost/loopback/link-local (SSRF) y devuelve texto plano (scripts/estilos fuera, cap 100KB).
 - Verificado E2E: opencode buscó la última versión de Python vía curl a /tools/search con su bash y citó fuentes correctas (3.14.7, agosto 2026).
+
+## 2026-09-15 — Equipo ejemplo: sello "Tinta Ardiente" (romance picante KDP)
+- `teams/romanticas/` — puerto 8504, key en su raft.yaml (local, gitignored). 7 agentes (onboarding + 6), 6 canales por lane, 12 aristas de org con la jefa-editorial como hub.
+- Pipeline diseñado: mercado (trendwatcher, opencode+web) → biblia → outline → borradores (novelista, opencode) → edición (editor-fino, claude) → beta (beta-lectora, claude) → paquete KDP (kdp-manager, claude). Escala de picante 1-5 objetivo 4 con límites KDP explícitos en instrucciones. Workspace: manuscrito/ (+ediciones/), biblia/, mercado/, publicacion/.
+- **Lección de diseño org**: no puse arista editor-fino→jefa (sus reportes van por canales) y el bloqueo automático funcionó en vivo; los agentes lo entendieron y se adaptaron ("espero señal en #manuscrito"). Lección: las aristas son para HANDOFFS de trabajo; los reportes de estado fluyen por canales. Si un lane necesita devolver trabajo al hub, añadir arista explícita.
+- El kickoff dejó la jefa esperando "luz verde del humano" para lanzar Fase 0 — buen comportamiento de seguridad del equipo; el usuario decide cuándo arrancar el pipeline real (consume múltiples runs con búsqueda web incluida).

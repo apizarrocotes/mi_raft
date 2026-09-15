@@ -26,6 +26,8 @@ miraft task done 1 -r "resultado"                  # cierra una task
 
 **Equipos**: cada equipo es un server aislado con su puerto, clave y workspace compartido donde los agentes entregan trabajo. Túnel: `ssh -N -L <puerto>:127.0.0.1:<puerto> apc@<host>`.
 
+Equipo de ejemplo "Tinta Ardiente" (romance picante KDP): `teams/romanticas/`, puerto **8504**, canal #general. Su jefa-editorial tiene el plan de la novela muestra "Bajo el mismo techo" esperando luz verde en #general (hilo 2). Workspace con esqueleto: manuscrito/, biblia/, mercado/, publicacion/.
+
 Webhook externo (con api_keys activas en raft.yaml):
 ```bash
 curl -X POST http://127.0.0.1:8420/channels/demo/messages \
