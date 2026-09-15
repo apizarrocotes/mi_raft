@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from .config import KNOWN_RUNTIMES, Config
 from .db import Database
 from .router import route_message
-from .runner import start_runner
+from .runner import start_background_tasks
 
 STATIC_DIR = Path(__file__).parent / "static"
 def _http_get(url: str, headers: dict | None = None, timeout: int = 15) -> tuple[int, str]:
@@ -212,6 +212,7 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
         print(f"mi_raft: {stuck} run(s) huérfanos marcados como failed")
     db.sync_config(cfg)
     db.server_port = cfg.server.port
+    db.escalate_to = cfg.escalate_to
     api_keys = [k for k in cfg.server.api_keys if k]
 
     if db.channel_exists("general") and not db.list_messages_since(0):
@@ -244,9 +245,10 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        task = start_runner(db)
+        tasks = start_background_tasks(db)
         yield
-        task.cancel()
+        for t in tasks:
+            t.cancel()
 
     app = FastAPI(title="mi_raft", lifespan=lifespan)
 

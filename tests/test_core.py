@@ -1305,3 +1305,133 @@ class TestOpencodeTelemetry:
         assert bash_ev["payload"]["output"] == "hello.py"
         write_ev = events[2]
         assert write_ev["payload"]["summary"] == "manuscrito/cap01.md (2000 chars)"
+
+
+class TestEscalation:
+    def test_failure_escalates_to_supervisor(self, tmp_path):
+        db = make_db(
+            tmp_path,
+            [
+                AgentConfig(name="frágil", runtime="fake-bad", work_dir="/tmp"),
+                AgentConfig(name="jefa", runtime="fake-ok", work_dir="/tmp"),
+            ],
+        )
+        db.escalate_to = "jefa"
+
+        class FakeOK(BaseRuntime):
+            name = "fake-ok"
+            def build_args(self, agent, session_id): return ["true"]
+            def parse_output(self, stdout): return RunResult(None, "ok")
+            async def run_turn(self, agent, prompt, session_id, timeout_s, event_sink=None):
+                return RunResult(None, "ok")
+
+        class FakeBad(BaseRuntime):
+            name = "fake-bad"
+            def build_args(self, agent, session_id): return ["true"]
+            def parse_output(self, stdout): return RunResult(None, "")
+            async def run_turn(self, agent, prompt, session_id, timeout_s, event_sink=None):
+                raise RuntimeError("explotó por timeout simulado")
+
+        register_runtime(FakeOK())
+        register_runtime(FakeBad())
+
+        root = db.insert_message("demo", "human", "apc", "@frágil hazlo")
+        route_message(db, root)
+        run = db.claim_next_run()
+        asyncio.run(execute_run(db, run))
+
+        escalation = db.conn.execute(
+            "SELECT * FROM message WHERE author_id='mi_raft' AND text LIKE '⚠️%'"
+        ).fetchone()
+        assert escalation is not None
+        assert "@jefa" in escalation["text"]
+        assert "frágil" in escalation["text"]
+        sup_run = db.conn.execute(
+            "SELECT * FROM run WHERE agent_id='jefa' AND status='queued'"
+        ).fetchone()
+        assert sup_run is not None
+        assert sup_run["thread_id"] == root
+
+    def test_no_self_escalation_when_supervisor_fails(self, tmp_path):
+        db = make_db(
+            tmp_path,
+            [AgentConfig(name="jefa", runtime="fake-bad", work_dir="/tmp")],
+        )
+        db.escalate_to = "jefa"
+
+        class FakeBad2(BaseRuntime):
+            name = "fake-bad"
+            def build_args(self, agent, session_id): return ["true"]
+            def parse_output(self, stdout): return RunResult(None, "")
+            async def run_turn(self, agent, prompt, session_id, timeout_s, event_sink=None):
+                raise RuntimeError("fallo")
+
+        register_runtime(FakeBad2())
+        root = db.insert_message("demo", "human", "apc", "@jefa hazlo")
+        route_message(db, root)
+        run = db.claim_next_run()
+        asyncio.run(execute_run(db, run))
+        assert db.conn.execute(
+            "SELECT COUNT(*) AS n FROM message WHERE text LIKE '⚠️%'"
+        ).fetchone()["n"] == 0
+        assert db.conn.execute(
+            "SELECT COUNT(*) AS n FROM run WHERE agent_id='jefa'"
+        ).fetchone()["n"] == 1
+
+    def test_org_block_escalates(self, tmp_path):
+        db = make_db(tmp_path)
+        db.escalate_to = "alpha"
+        with db.tx() as conn:
+            conn.execute("INSERT INTO org_edge (from_id, to_id) VALUES ('alpha','beta')")
+        m = db.insert_message("demo", "agent", "beta", "@alpha necesito algo fuera de lanes")
+        runs = route_message(db, m)
+        assert runs == []
+        esc = db.conn.execute(
+            "SELECT * FROM message WHERE text LIKE '⚠️%bloqueado%'"
+        ).fetchone()
+        assert esc is not None and "@alpha" in esc["text"]
+        sup_run = db.conn.execute(
+            "SELECT * FROM run WHERE agent_id='alpha' AND status='queued'"
+        ).fetchone()
+        assert sup_run is not None
+
+    def test_watchdog_fails_stuck_runs(self, tmp_path):
+        from mi_raft.runner import watchdog_loop
+
+        db = make_db(
+            tmp_path,
+            [AgentConfig(name="alpha", runtime="claude", work_dir="/tmp", timeout_s=600)],
+        )
+        db.escalate_to = None
+        db.insert_message("demo", "human", "apc", "@alpha hazlo")
+        run_id = db.insert_run("alpha", "demo", 1, 1)
+        db.conn.execute(
+            "UPDATE run SET status='running', started_at=datetime('now', '-30 minutes')"
+            " WHERE id=?",
+            (run_id,),
+        )
+        db.conn.commit()
+
+        task = asyncio.get_event_loop().create_task if False else None
+        async def once():
+            t = asyncio.get_running_loop().create_task(watchdog_loop(db, poll_s=0.1))
+            await asyncio.sleep(0.3)
+            t.cancel()
+
+        asyncio.run(once())
+        row = db.conn.execute("SELECT status, error FROM run WHERE id=?", (run_id,)).fetchone()
+        assert row["status"] == "failed"
+        assert "watchdog" in row["error"]
+
+    def test_escalation_cap_per_thread(self, tmp_path):
+        db = make_db(
+            tmp_path,
+            [
+                AgentConfig(name="frágil", runtime="fake-bad", work_dir="/tmp"),
+                AgentConfig(name="jefa", runtime="fake-ok", work_dir="/tmp"),
+            ],
+        )
+        db.escalate_to = "jefa"
+        for _ in range(5):
+            db.insert_message("demo", "human", "mi_raft", "⚠️ escalación previa", thread_id=7)
+        assert db.escalations_in_thread(7) >= 3

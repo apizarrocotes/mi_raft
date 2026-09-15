@@ -10,6 +10,23 @@ MENTION_STRUCTURED = re.compile(r"\[@([^\]]+)\]\(mention://agent/([^)]+)\)")
 MENTION_PLAIN = re.compile(r"(?<![\w./])@([\w-]+)", re.IGNORECASE)
 
 MAX_AGENT_REPLIES_PER_THREAD = 20
+MAX_ESCALATIONS_PER_THREAD = 3
+
+
+def escalate(db: Database, channel_id: str, thread_id: int, text: str) -> None:
+    """Publica una escalación al supervisor (con @mención si procede) y la enruta."""
+    supervisor = db.escalate_to
+    if db.escalations_in_thread(thread_id) >= MAX_ESCALATIONS_PER_THREAD:
+        db.insert_message(
+            channel_id, "human", "mi_raft", f"⚠️ {text}", thread_id=thread_id, msg_type="status"
+        )
+        return
+    if supervisor and db.get_agent_row(supervisor):
+        text = f"@{supervisor} {text}"
+    mid = db.insert_message(
+        channel_id, "human", "mi_raft", f"⚠️ {text}", thread_id=thread_id
+    )
+    route_message(db, mid)
 
 
 def extract_mentions(text: str, known_agents: set[str]) -> set[str]:
@@ -59,6 +76,14 @@ def route_message(db: Database, message_id: int) -> list[int]:
                 thread_id=msg["thread_id"],
                 msg_type="status",
             )
+            if db.escalate_to and db.escalate_to != author:
+                escalate(
+                    db,
+                    msg["channel_id"],
+                    msg["thread_id"] or msg["id"],
+                    f"handoff bloqueado por el organigrama: {author} → {agent_id}. "
+                    "El pipeline puede estar esperando; re-delega o ajusta el org.",
+                )
             continue
         thread_id = msg["thread_id"] if msg["thread_id"] else msg["id"]
         if db.coalesce_run(agent_id, msg["channel_id"], thread_id, message_id):

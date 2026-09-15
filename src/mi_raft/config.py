@@ -52,6 +52,7 @@ class Config:
     team: str = "mi_raft"
     workspace: str | None = None
     org: dict[str, list[str]] = field(default_factory=dict)
+    escalate_to: str | None = None
 
 
 def example_config_text() -> str:
@@ -134,4 +135,4 @@ def load_config(path: str | Path) -> Config:
         channels.append(ChannelConfig(name=cname, topic=item.get("topic") or ""))
 
     return Config(server=server, agents=agents, channels=channels, team=team,
-                  workspace=workspace, org=org)
+                  workspace=workspace, org=org, escalate_to=raw.get("escalate_to"))

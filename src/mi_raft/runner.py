@@ -7,7 +7,7 @@ import time
 import urllib.request
 
 from .db import Database
-from .router import build_prompt, route_message
+from .router import build_prompt, escalate, route_message
 from .runtimes import get_runtime
 
 log = logging.getLogger("mi_raft.runner")
@@ -110,6 +110,7 @@ async def execute_external_run(db: Database, run, agent) -> None:
     _fail_run(db, run, agent, "el agente externo no respondió a tiempo")
 
 
+GLOBAL_MAX_INFLIGHT = 4
 def _fail_run(db: Database, run, agent, error: str) -> None:
     db.set_agent_status(agent.name, "error")
     db.finish_run(run["id"], "failed", None, None, None, error)
@@ -121,7 +122,44 @@ def _fail_run(db: Database, run, agent, error: str) -> None:
         thread_id=run["thread_id"],
         msg_type="status",
     )
+    task = db.task_for_thread(run["thread_id"])
+    task_note = f" (task #{task['id']} afectada)" if task else ""
+    if agent.name == db.escalate_to:
+        return
+    escalate(
+        db,
+        run["channel_id"],
+        run["thread_id"],
+        f"el agente {agent.name} falló en este hilo: {error[:140]}{task_note}. "
+        "Revisa y re-delega o reajusta el alcance.",
+    )
+
+
+async def watchdog_loop(db: Database, poll_s: float = 60.0) -> None:
+    """Detecta runs atascados en 'running' más allá del timeout + gracia."""
+    while True:
+        try:
+            for run in db.stuck_running_runs(grace_s=120):
+                agent = db.get_agent(run["agent_id"])
+                db.finish_run(
+                    run["id"], "failed", None, None, None,
+                    "watchdog: excedió timeout + gracia sin terminar",
+                )
+                _fail_run(db, run, agent, "watchdog: excedió timeout + gracia sin terminar")
+                log.warning("watchdog: run %s de %s terminado a la fuerza", run["id"], agent.name)
+        except Exception:
+            log.exception("Error en el watchdog")
+        await asyncio.sleep(poll_s)
 
 
 def start_runner(db: Database) -> asyncio.Task:
-    return asyncio.get_running_loop().create_task(runner_loop(db))
+    loop = asyncio.get_running_loop()
+    return loop.create_task(runner_loop(db))
+
+
+def start_background_tasks(db: Database) -> list[asyncio.Task]:
+    loop = asyncio.get_running_loop()
+    return [
+        loop.create_task(runner_loop(db)),
+        loop.create_task(watchdog_loop(db)),
+    ]

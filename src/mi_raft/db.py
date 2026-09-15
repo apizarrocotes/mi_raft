@@ -145,6 +145,7 @@ class Database:
         self.lock = threading.Lock()
         self.on_message_created = None
         self.server_port: int | None = None
+        self.escalate_to: str | None = None
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
@@ -586,6 +587,29 @@ class Database:
             " tokens_out, error, created_at, started_at, finished_at"
             " FROM run ORDER BY id DESC LIMIT ?",
             (limit,),
+        ).fetchall()
+
+    def escalations_in_thread(self, thread_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM message WHERE thread_id = ? AND author_id = 'mi_raft'"
+            " AND text LIKE '⚠️%'",
+            (thread_id,),
+        ).fetchone()
+        return int(row["n"])
+
+    def task_for_thread(self, thread_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM task WHERE thread_id = ? AND status IN ('todo','in_progress','in_review')"
+            " ORDER BY id DESC LIMIT 1",
+            (thread_id,),
+        ).fetchone()
+
+    def stuck_running_runs(self, grace_s: int = 120) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT r.*, a.timeout_s FROM run r JOIN agent a ON a.id = r.agent_id"
+            " WHERE r.status = 'running'"
+            " AND r.started_at < datetime('now', '-' || (a.timeout_s + ?) || ' seconds')",
+            (grace_s,),
         ).fetchall()
 
     def usage_by_agent(self) -> list[sqlite3.Row]:
