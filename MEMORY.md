@@ -102,6 +102,16 @@
 - En romanticas, trendwatcher y novelista tienen provider nan + glm5.3-flash explícito (antes era el default implícito de opencode).
 - Los agentes del equipo publican por la API con curl (lo aprendieron solos leyendo raft.yaml) — el prompt ahora les enseña a firmar con su author; mensajes anónimos #50/#55 re-atribuidos a novelista en la DB.
 
+## 2026-09-15 — Auditoría de errores + M1-M6 (análisis pedido por el usuario)
+- **Hallazgos del análisis** (canal + actividad): 34/49 eventos = handoffs bloqueados por org (agentes no conocían el grafo a priori); ack-storms = el 80% del coste (5 agentes en un canal, cada reply despierta a otros; acuses "sin acción" con turnos claude de 2-15 min); stale snapshots (agentes deciden sobre estado viejo de hilos); kdp despierto sin poder trabajar (falta de precedencia); 15 fallos de run.
+- **M1**: grafo de comunicación inyectado en el prompt (delega a / reporta a / fuera de líneas por canal sin mención / no-acuses).
+- **M3**: continuidad de hilo SOLO en DMs — en canales multi-agente solo las menciones despiertan. Test actualizado (continuidad en canal normal = 0 runs; en DM = 1).
+- **M4**: task_deps + claim que salta hilos con tasks bloqueadas. CUIDADO: el claim puede devolver None aunque haya runs queued si su thread está bloqueado — los tests de continuidad deben cerrar sus runs (finish_run) antes de reclamar el siguiente (max_concurrent=1 bloqueaba el test, no el código).
+- **M5**: phase en tasks (texto libre; fases del sello: mercado/biblia/borrador/edicion/publicacion).
+- **M6**: editor-fino/beta-lectora/kdp-manager → pi + nan/deepseek-v4-flash (384K salida, elimina reason=length; 1M contexto). La jefa se queda en claude. Sesiones claude previas no migran — la memoria por fichero es el transporte de contexto. Primer run pi verificado en vivo (#308, 20 ops, tool events capturados).
+- **Cosmético pendiente**: el parse_line de pi captura el prompt del usuario como eventos text (op #1/#3) — filtrar role=user en el futuro.
+- **Estado**: server romanticas REINICIADO y operativo con todo M1-M6. Si el coste sigue siendo alto, el siguiente escalón es membresía por canal (Raft-style: los agentes solo escuchan sus lanes).
+
 ## 2026-09-15 — Equipo ejemplo: sello "Tinta Ardiente" (romance picante KDP)
 - `teams/romanticas/` — puerto 8504, key en su raft.yaml (local, gitignored). 7 agentes (onboarding + 6), 6 canales por lane, 12 aristas de org con la jefa-editorial como hub.
 - Pipeline diseñado: mercado (trendwatcher, opencode+web) → biblia → outline → borradores (novelista, opencode) → edición (editor-fino, claude) → beta (beta-lectora, claude) → paquete KDP (kdp-manager, claude). Escala de picante 1-5 objetivo 4 con límites KDP explícitos en instrucciones. Workspace: manuscrito/ (+ediciones/), biblia/, mercado/, publicacion/.

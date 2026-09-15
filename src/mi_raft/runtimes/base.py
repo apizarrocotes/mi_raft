@@ -93,6 +93,7 @@ class BaseRuntime(ABC):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
+            limit=64 * 1024 * 1024,
         )
         stdout_lines: list[str] = []
 
@@ -143,8 +144,10 @@ class BaseRuntime(ABC):
             stdin_task.cancel()
         stderr = await stderr_task
         if proc.returncode != 0:
+            stdout_tail = "".join(stdout_lines)[-600:]
             raise RuntimeError(
-                f"{self.name} salió con código {proc.returncode}: {stderr.strip()[:2000]}"
+                f"{self.name} salió con código {proc.returncode}: "
+                f"stderr={stderr.strip()[:600] or '(vacío)'} | stdout_tail={stdout_tail}"
             )
         return self.parse_output("".join(stdout_lines))
 
