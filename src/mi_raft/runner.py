@@ -36,18 +36,30 @@ async def runner_loop(db: Database, poll_s: float = 0.5) -> None:
 async def execute_run(db: Database, run) -> None:
     agent = db.get_agent(run["agent_id"])
     db.set_agent_status(agent.name, "working")
+    seq = {"n": 0}
+
+    def sink(ev: dict) -> None:
+        db.insert_run_message(
+            run["id"], seq["n"], str(ev.get("type") or "event"),
+            ev.get("tool"), ev.get("payload") or {},
+        )
+        seq["n"] += 1
+
     if agent.runtime == "external":
+        sink({"type": "step", "tool": None, "payload": {"event": f"wake enviado a {agent.wake_url}"}})
         await execute_external_run(db, run, agent)
         db.set_agent_status(agent.name, "idle")
         return
     runtime = get_runtime(agent.runtime)
     session_id = db.last_session_for(agent.name, run["thread_id"])
     prompt = build_prompt(db, agent, run["channel_id"], run["thread_id"])
+    sink({"type": "step", "tool": None, "payload": {"event": "turno iniciado"}})
     try:
-        result = await runtime.run_turn(agent, prompt, session_id, agent.timeout_s)
+        result = await runtime.run_turn(agent, prompt, session_id, agent.timeout_s, event_sink=sink)
     except Exception as exc:
         _fail_run(db, run, agent, str(exc))
         return
+    sink({"type": "step", "tool": None, "payload": {"event": "turno completado"}})
     db.finish_run(
         run["id"], "done", result.session_id, agent.work_dir, result.text, None,
         cost_usd=result.cost_usd, tokens_in=result.tokens_in, tokens_out=result.tokens_out,

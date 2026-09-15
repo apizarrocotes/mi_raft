@@ -18,6 +18,26 @@ class PiRuntime(BaseRuntime):
         args += agent.extra_args
         return args
 
+    def parse_line(self, line: str, sink) -> None:
+        for ev in parse_json_lines(line):
+            data = ev.get("data") if isinstance(ev.get("data"), dict) else ev
+            msg = data.get("message") or {}
+            blocks = msg.get("content") or []
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                btype = str(block.get("type", ""))
+                if "tool" in btype:
+                    sink({
+                        "type": "tool_use",
+                        "tool": block.get("tool") or block.get("name") or btype,
+                        "payload": {k: v for k, v in block.items() if k != "type"},
+                    })
+                elif btype == "text" and str(block.get("text", "")).strip():
+                    sink({"type": "text", "tool": None, "payload": {"text": block["text"][:800]}})
+            if str(ev.get("type", "")) in ("message_start", "message_end", "turn_end"):
+                sink({"type": "step", "tool": None, "payload": {"event": ev.get("type")}})
+
     def parse_output(self, stdout: str) -> RunResult:
         events = parse_json_lines(stdout)
         session_id = None

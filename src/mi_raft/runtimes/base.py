@@ -76,6 +76,7 @@ class BaseRuntime(ABC):
         prompt: str,
         session_id: str | None,
         timeout_s: int,
+        event_sink=None,
     ) -> RunResult:
         work_dir = Path(agent.work_dir).expanduser()
         if not work_dir.is_dir():
@@ -91,21 +92,62 @@ class BaseRuntime(ABC):
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
         )
+        stdout_lines: list[str] = []
+
+        async def pump_stdout() -> None:
+            assert proc.stdout is not None
+            async for raw in proc.stdout:
+                line = raw.decode(errors="replace")
+                stdout_lines.append(line)
+                if event_sink:
+                    try:
+                        self.parse_line(line, event_sink)
+                    except Exception:
+                        pass
+
+        async def pump_stderr() -> str:
+            assert proc.stderr is not None
+            data = await proc.stderr.read()
+            return data.decode(errors="replace")
+
+        loop = asyncio.get_running_loop()
+        pump_task = loop.create_task(pump_stdout())
+        stderr_task = loop.create_task(pump_stderr())
+
+        async def feed_stdin() -> None:
+            assert proc.stdin is not None
+            try:
+                proc.stdin.write(prompt.encode())
+                await proc.stdin.drain()
+            except Exception:
+                pass
+            finally:
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
+
+        stdin_task = loop.create_task(feed_stdin())
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(prompt.encode()), timeout=timeout_s
-            )
-        except asyncio.TimeoutError:
+            async with asyncio.timeout(timeout_s):
+                await pump_task
+                await proc.wait()
+        except TimeoutError:
             self._kill_tree(proc)
             raise RuntimeTimeout(
                 f"{self.name} excedió el timeout de {timeout_s}s y fue terminado"
             )
+        finally:
+            stdin_task.cancel()
+        stderr = await stderr_task
         if proc.returncode != 0:
-            stderr = stderr_b.decode(errors="replace").strip()
             raise RuntimeError(
-                f"{self.name} salió con código {proc.returncode}: {stderr[:2000]}"
+                f"{self.name} salió con código {proc.returncode}: {stderr.strip()[:2000]}"
             )
-        return self.parse_output(stdout_b.decode(errors="replace"))
+        return self.parse_output("".join(stdout_lines))
+
+    def parse_line(self, line: str, sink) -> None:
+        return None
 
     @staticmethod
     def _kill_tree(proc: asyncio.subprocess.Process) -> None:

@@ -431,6 +431,14 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
     def activity(limit: int = 50):
         return [dict(r) for r in db.activity(min(limit, 200))]
 
+    @app.get("/runs", dependencies=[Depends(require_key)])
+    def runs(agent: str | None = None, limit: int = 50):
+        return [dict(r) for r in db.recent_runs(agent, min(limit, 200))]
+
+    @app.get("/runs/{run_id}/messages", dependencies=[Depends(require_key)])
+    def run_messages(run_id: int):
+        return [dict(r) for r in db.list_run_messages(run_id)]
+
     @app.get("/dms", dependencies=[Depends(require_key)])
     def list_dms():
         return [dict(r) for r in db.list_dms()]

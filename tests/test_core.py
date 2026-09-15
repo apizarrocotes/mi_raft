@@ -152,7 +152,7 @@ class FakeHandoffRuntime(BaseRuntime):
     def parse_output(self, stdout):
         return RunResult(session_id="fake-session", text="Listo. @beta revisa esto")
 
-    async def run_turn(self, agent, prompt, session_id, timeout_s):
+    async def run_turn(self, agent, prompt, session_id, timeout_s, event_sink=None):
         self.turns.append(prompt)
         return self.parse_output("")
 
@@ -777,14 +777,14 @@ class TestAgentStatus:
             name = "fake-ok"
             def build_args(self, agent, session_id): return ["true"]
             def parse_output(self, stdout): return RunResult(session_id="x", text="bien")
-            async def run_turn(self, agent, prompt, session_id, timeout_s):
+            async def run_turn(self, agent, prompt, session_id, timeout_s, event_sink=None):
                 return RunResult(session_id="x", text="bien")
 
         class FakeBad(BaseRuntime):
             name = "fake-bad"
             def build_args(self, agent, session_id): return ["true"]
             def parse_output(self, stdout): return RunResult(session_id=None, text="")
-            async def run_turn(self, agent, prompt, session_id, timeout_s):
+            async def run_turn(self, agent, prompt, session_id, timeout_s, event_sink=None):
                 raise RuntimeError("explotó")
 
         register_runtime(FakeOK())
@@ -1014,7 +1014,7 @@ class TestTasksV2:
             name = "fake-split"
             def build_args(self, agent, session_id): return ["true"]
             def parse_output(self, stdout): return RunResult(None, "")
-            async def run_turn(self, agent, prompt, session_id, timeout_s):
+            async def run_turn(self, agent, prompt, session_id, timeout_s, event_sink=None):
                 assert "JSON" in prompt
                 return RunResult(None, '[{"title": "pieza A", "description": "x"}, {"title": "pieza B"}]')
 
@@ -1055,7 +1055,7 @@ class TestConcurrentRunner:
             name = "fake-slow"
             def build_args(self, agent, session_id): return ["true"]
             def parse_output(self, stdout): return RunResult(None, "ok")
-            async def run_turn(self, agent, prompt, session_id, timeout_s):
+            async def run_turn(self, agent, prompt, session_id, timeout_s, event_sink=None):
                 await asyncio.sleep(0.6)
                 return RunResult(None, "ok")
 
@@ -1109,3 +1109,92 @@ class TestSandbox:
         assert a.sandbox == {}
         b = AgentConfig(name="y", runtime="claude", work_dir="/tmp", sandbox={"enable": True})
         assert b.sandbox == {"enable": True}
+
+
+class TestRunTelemetry:
+    def test_claude_stream_json_events(self):
+        from mi_raft.runtimes.claude import ClaudeRuntime
+
+        lines = "\n".join([
+            json.dumps({"type": "system", "subtype": "init"}),
+            json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+            ]}}),
+            json.dumps({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "file.txt"},
+            ]}}),
+            json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Listo"},
+            ]}}),
+            json.dumps({"type": "result", "result": "Listo", "session_id": "s9",
+                        "total_cost_usd": 0.02,
+                        "usage": {"input_tokens": 500, "output_tokens": 30}}),
+        ])
+        rt = ClaudeRuntime()
+        events = []
+        rt.parse_line(lines.splitlines()[1], events.append)
+        rt.parse_line(lines.splitlines()[2], events.append)
+        rt.parse_line(lines.splitlines()[3], events.append)
+        assert events[0] == {"type": "tool_use", "tool": "Bash", "payload": {"input": {"command": "ls"}}}
+        assert events[1]["type"] == "tool_result"
+        assert events[2] == {"type": "text", "tool": None, "payload": {"text": "Listo"}}
+        r = rt.parse_output(lines)
+        assert r.text == "Listo" and r.session_id == "s9" and r.cost_usd == 0.02
+
+    def test_old_claude_single_json_still_parses(self):
+        from mi_raft.runtimes.claude import ClaudeRuntime
+
+        out = json.dumps({"result": "ok", "session_id": "s1", "total_cost_usd": 0.01,
+                          "usage": {"input_tokens": 10, "output_tokens": 5}})
+        r = ClaudeRuntime().parse_output(out)
+        assert r.text == "ok" and r.cost_usd == 0.01
+
+    def test_runner_writes_run_messages(self, tmp_path):
+        db = make_db(
+            tmp_path,
+            [AgentConfig(name="telemetrico", runtime="fake-ops", work_dir="/tmp")],
+        )
+
+        from mi_raft.runtimes import BaseRuntime, RunResult, register_runtime
+
+        class FakeOps(BaseRuntime):
+            name = "fake-ops"
+            def build_args(self, agent, session_id): return ["true"]
+            def parse_output(self, stdout): return RunResult("s1", "terminado")
+            async def run_turn(self, agent, prompt, session_id, timeout_s, event_sink=None):
+                assert event_sink is not None
+                event_sink({"type": "tool_use", "tool": "Bash", "payload": {"input": {"command": "ls"}}})
+                event_sink({"type": "tool_result", "tool": None, "payload": {"content": "salida"}})
+                event_sink({"type": "text", "tool": None, "payload": {"text": "pensando"}})
+                return RunResult("s1", "terminado")
+
+        register_runtime(FakeOps())
+        root = db.insert_message("demo", "human", "apc", "@telemetrico opera")
+        route_message(db, root)
+        run = db.claim_next_run()
+        asyncio.run(execute_run(db, run))
+
+        ops = db.list_run_messages(run["id"])
+        types = [o["type"] for o in ops]
+        assert types == ["step", "tool_use", "tool_result", "text", "step"]
+        assert ops[1]["tool"] == "Bash"
+        seqs = [o["seq"] for o in ops]
+        assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)
+
+    def test_runs_endpoints(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from mi_raft.server import create_app
+
+        cfg = make_config()
+        cfg.server.db = str(tmp_path / "raft.db")
+        db = make_db(tmp_path)
+        rid = db.insert_run("alpha", "demo", 1, 1)
+        db.insert_run_message(rid, 0, "step", None, {"event": "turno iniciado"})
+        db.insert_run_message(rid, 1, "tool_use", "Bash", {"input": {"command": "ls"}})
+        client = TestClient(create_app(cfg, db))
+        runs = client.get("/runs", params={"agent": "alpha"}).json()
+        assert runs and runs[0]["id"] == rid and runs[0]["agent_id"] == "alpha"
+        ops = client.get(f"/runs/{rid}/messages").json()
+        assert [o["seq"] for o in ops] == [0, 1]
+        assert ops[1]["tool"] == "Bash"

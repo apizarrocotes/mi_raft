@@ -482,13 +482,87 @@ async function jumpToMessage(channelId, messageId) {
 
 async function renderActivity() {
   const view = $("view");
-  const items = await api("/activity?limit=80").catch(() => []);
+  const [items, runs] = await Promise.all([
+    api("/activity?limit=40").catch(() => []),
+    api("/runs?limit=60").catch(() => []),
+  ]);
+  const agentOpts = ['<option value="">todos</option>']
+    .concat(S.agents.map(a => `<option value="${esc(a.id)}">${esc(a.id)}</option>`)).join("");
+  const runRows = runs.map(r => {
+    const t = (r.started_at || r.created_at || "").slice(11, 16);
+    const badge = r.status === "done" ? "done" : r.status === "running" ? "in_progress" : r.status === "failed" ? "cancelled" : "todo";
+    return `
+      <div class="act-item" style="cursor:pointer" data-run="${r.id}">
+        <span class="badge ${badge}">${r.status}</span>
+        <b>${esc(r.agent_id)}</b> · #${esc(r.channel_id)}${r.thread_id ? " hilo " + r.thread_id : ""}
+        · ${t}${r.cost_usd != null ? ` · $${r.cost_usd.toFixed(4)}` : ""}
+        ${r.tokens_in != null ? ` · ${r.tokens_in}/${r.tokens_out} tok` : ""}
+        ${r.error ? ` · <span style="color:var(--danger)">${esc(r.error.slice(0, 60))}</span>` : ""}
+      </div>`;
+  }).join("");
   view.innerHTML = `
-    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">Actividad reciente del equipo (eventos del sistema)</div>
-    ${items.map(m => `
-      <div class="act-item">
-        <b>#${esc(m.channel_id)}</b> · ${(m.created_at || "").slice(11, 16)} · ${esc(m.text)}
-      </div>`).join("") || '<div class="empty">sin actividad</div>'}`;
+    <div style="display:flex;gap:14px;align-items:center;margin-bottom:10px">
+      <b>Runs recientes</b>
+      <select id="act-agent" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 8px">${agentOpts}</select>
+      <span style="color:var(--muted);font-size:12px">clic en un run para ver todas sus operaciones</span>
+    </div>
+    <div id="runs-list">${runRows || '<div class="empty">sin runs</div>'}</div>
+    <div id="run-detail" style="margin-top:14px"></div>
+    <div style="margin-top:18px;color:var(--muted);font-size:12px">Eventos del sistema</div>
+    <div style="margin-top:4px">${items.map(m => `
+      <div class="act-item"><b>#${esc(m.channel_id)}</b> · ${(m.created_at || "").slice(11, 16)} · ${esc(m.text)}</div>`).join("") || '<div class="empty">sin actividad</div>'}</div>`;
+  $("act-agent").onchange = () => renderActivityFilter($("act-agent").value);
+  view.querySelectorAll("[data-run]").forEach(el => {
+    el.onclick = () => showRunDetail(Number(el.dataset.run));
+  });
+}
+
+async function renderActivityFilter(agent) {
+  const runs = await api(`/runs${agent ? `?agent=${agent}` : ""}&limit=60`).catch(() => []);
+  const map = { done: "done", running: "in_progress", failed: "cancelled", queued: "todo" };
+  $("runs-list").innerHTML = runs.map(r => {
+    const t = (r.started_at || r.created_at || "").slice(11, 16);
+    return `
+      <div class="act-item" style="cursor:pointer" data-run="${r.id}">
+        <span class="badge ${map[r.status] || "todo"}">${r.status}</span>
+        <b>${esc(r.agent_id)}</b> · #${esc(r.channel_id)} · ${t}
+        ${r.cost_usd != null ? ` · $${r.cost_usd.toFixed(4)}` : ""}
+      </div>`;
+  }).join("") || '<div class="empty">sin runs</div>';
+  document.querySelectorAll("#runs-list [data-run]").forEach(el => {
+    el.onclick = () => showRunDetail(Number(el.dataset.run));
+  });
+}
+
+const OP_ICON = { tool_use: "🔧", tool_result: "↩", text: "💬", step: "▸" };
+async function showRunDetail(runId) {
+  const box = $("run-detail");
+  if (!box) return;
+  const ops = await api(`/runs/${runId}/messages`).catch(() => []);
+  box.innerHTML = `
+    <div class="cardbox">
+      <h3>Run #${runId} — ${ops.length} operación(es)</h3>
+      ${ops.map(op => {
+        const icon = OP_ICON[op.type] || "•";
+        let detail = "";
+        try {
+          const p = JSON.parse(op.payload_json || "{}");
+          if (op.type === "tool_use") detail = `<code style="font-size:11px">${esc(JSON.stringify(p.input || p).slice(0, 160))}</code>`;
+          else if (op.type === "text") detail = esc((p.text || "").slice(0, 200));
+          else if (op.type === "tool_result") detail = esc((p.content || "").slice(0, 200));
+          else detail = esc(p.event || "");
+        } catch (e) { detail = esc(op.payload_json.slice(0, 120)); }
+        return `
+          <div class="act-item" style="display:flex;gap:8px">
+            <span style="width:34px;color:var(--muted)">#${op.seq}</span>
+            <span>${icon}</span>
+            <span style="min-width:0">
+              ${op.tool ? `<b>${esc(op.tool)}</b> ` : ""}${detail}
+            </span>
+          </div>`;
+      }).join("") || '<div class="empty">sin operaciones registradas (runs antiguos)</div>'}
+    </div>`;
+  box.scrollIntoView({ block: "nearest" });
 }
 
 $("add-dm").onclick = async () => {

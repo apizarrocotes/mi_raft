@@ -18,6 +18,21 @@ class OpencodeRuntime(BaseRuntime):
         args += agent.extra_args
         return args
 
+    def parse_line(self, line: str, sink) -> None:
+        for ev in parse_json_lines(line):
+            part = ev.get("part") or {}
+            ev_type = ev.get("type", "")
+            if ev_type in ("step_start", "step_finish"):
+                sink({"type": "step", "tool": None, "payload": {"event": ev_type}})
+            elif ev_type == "text" and isinstance(part.get("text"), str):
+                sink({"type": "text", "tool": None, "payload": {"text": part["text"][:800]}})
+            elif isinstance(part, dict) and "tool" in str(part.get("type", "")):
+                sink({
+                    "type": "tool_use",
+                    "tool": part.get("tool") or part.get("toolName") or part.get("type"),
+                    "payload": {"part": part},
+                })
+
     def parse_output(self, stdout: str) -> RunResult:
         events = parse_json_lines(stdout)
         texts: list[str] = []

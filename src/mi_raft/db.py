@@ -100,6 +100,18 @@ CREATE TABLE IF NOT EXISTS webhook (
   secret TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS run_message (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL,
+  seq INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  tool TEXT,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_message ON run_message(run_id, seq);
 """
 
 AGENT_COLUMNS = (
@@ -544,6 +556,33 @@ class Database:
     def set_agent_status(self, agent_id: str, status: str) -> None:
         with self.tx() as conn:
             conn.execute("UPDATE agent SET status=? WHERE id=?", (status, agent_id))
+
+    def insert_run_message(self, run_id: int, seq: int, ev_type: str, tool: str | None, payload: dict) -> None:
+        with self.tx() as conn:
+            conn.execute(
+                "INSERT INTO run_message (run_id, seq, type, tool, payload_json) VALUES (?,?,?,?,?)",
+                (run_id, seq, ev_type, tool, json.dumps(payload, default=str)[:4096]),
+            )
+
+    def list_run_messages(self, run_id: int) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM run_message WHERE run_id = ? ORDER BY seq", (run_id,)
+        ).fetchall()
+
+    def recent_runs(self, agent_id: str | None = None, limit: int = 50) -> list[sqlite3.Row]:
+        if agent_id:
+            return self.conn.execute(
+                "SELECT id, agent_id, status, channel_id, thread_id, cost_usd, tokens_in,"
+                " tokens_out, error, created_at, started_at, finished_at"
+                " FROM run WHERE agent_id = ? ORDER BY id DESC LIMIT ?",
+                (agent_id, limit),
+            ).fetchall()
+        return self.conn.execute(
+            "SELECT id, agent_id, status, channel_id, thread_id, cost_usd, tokens_in,"
+            " tokens_out, error, created_at, started_at, finished_at"
+            " FROM run ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
 
     def usage_by_agent(self) -> list[sqlite3.Row]:
         return self.conn.execute(

@@ -65,3 +65,10 @@
 - **Lección técnica repetida (3 veces)**: editar con oldString que termina en "\n" fusiona la línea siguiente — causó 3 SyntaxError (server.py, __main__.py). Al hacer edits de línea única, incluir la línea siguiente en el oldString y replicarla en el newString.
 - **Regla reforzada**: modelos Pydantic SIEMPRE a nivel de módulo (mordida nº 3 con BreakdownIn dentro de create_app).
 - Los tests de @mención multi-agente con route_message insertan mensajes en el canal demo del tmp — sin efectos colaterales; todo el suite (53) corre en <8s offline.
+
+## 2026-09-15 — Telemetría de ejecución (run_message)
+- **Refactor clave de BaseRuntime.run_turn**: de `communicate()` a pump de stdout línea a línea con `asyncio.timeout` (3.11), stdin feed concurrente como task, stderr concurrente. Sin esto no hay telemetría en vivo ni cancelación limpia.
+- **claude pasa a `--output-format stream-json --verbose`** (verbose es obligatorio en -p con stream-json): eventos `assistant.message.content[]` con blocks `tool_use` (name/input) y `user` con `tool_result`; el resultado final llega en el evento `type:"result"` (último). parse_output mantiene compat con el JSON único antiguo.
+- opencode: los tool calls llegan como evento con `part.type == "tool"` (tool: bash, callID, state.input) — parseo defensivo por contener "tool" en el type. pi: blocks con type que contiene "tool" (defensivo, no verificado con tool real). opencode-serve: solo tipos session.next.*; tool events si aparecen.
+- **sink pattern**: runner pasa `event_sink` a run_turn; los fakes de tests necesitan `event_sink=None` en su firma (si no, TypeError). Cada runtime emite {type: tool_use|tool_result|text|step, tool, payload}; payload truncado a 4096 chars en DB.
+- Verificado real: run de opencode con bash captura tool_use con el comando completo, steps y texto.

@@ -42,10 +42,10 @@ Los runtimes **ya devuelven** coste/tokens (claude: `total_cost_usd`/`usage`; op
 - Columnas `cost_usd`, `tokens_in`, `tokens_out` en `run`; capturarlas en cada runtime.
 - `GET /usage?by=agent|day`; mini-panel en pestaña Equipo; presupuesto opcional por agente en YAML (`budget_usd` → `--max-budget-usd` en claude).
 
-### 7. Telemetría de ejecución (run messages) — `L`
+### 7. Telemetría de ejecución (run messages) — ✅ HECHO (2026-09-15)
 multica registra cada paso del agente (`task_message`: tool, input/output secuenciados); Raft lo llama observabilidad básica.
-- Tabla `run_message(run_id, seq, type, tool, payload_json)` alimentada por los formatos streaming (`claude --output-format stream-json`, eventos de opencode/pi).
-- Vista "qué está haciendo ahora" por run + reproducción de la ejecución.
+- ~~Tabla `run_message(run_id, seq, type, tool, payload_json)`~~ **implementada**: streaming de stdout de cada runtime (claude vía `stream-json --verbose`, opencode/pi/serve parseo defensivo), sink con seq por run.
+- ~~Vista "qué está haciendo ahora"~~ **implementada**: pestaña Actividad con runs por agente + timeline de operaciones; CLI `miraft runs` / `miraft run <id>`.
 
 ---
 

@@ -239,6 +239,27 @@ def cmd_search(args) -> None:
         print("(sin resultados)")
 
 
+def cmd_runs(args) -> None:
+    url = _server_url(args)
+    qs = f"?agent={args.agent}&limit={args.limit}" if args.agent else f"?limit={args.limit}"
+    out = _http_json("GET", f"{url}/runs{qs}", key=_api_key(args))
+    for r in out:
+        t = (r.get("started_at") or r.get("created_at") or "")[11:16]
+        cost = f" ${r['cost_usd']:.4f}" if r.get("cost_usd") is not None else ""
+        print(f"[{r['id']} {t}] {r['agent_id']} {r['status']}#{r['channel_id']}{cost}")
+
+
+def cmd_run(args) -> None:
+    url = _server_url(args)
+    ops = _http_json("GET", f"{url}/runs/{args.id}/messages", key=_api_key(args))
+    if not ops:
+        print("(sin operaciones registradas para este run)")
+        return
+    for op in ops:
+        tool = f" {op['tool']}" if op.get("tool") else ""
+        print(f"[{op['seq']:>3}] {op['type']}{tool}: {op['payload_json'][:140]}")
+
+
 def cmd_agents(args) -> None:
     out = _http_json("GET", f"{_server_url(args)}/agents", key=_api_key(args))
     for a in out:
@@ -401,6 +422,19 @@ def main(argv=None) -> None:
     p.add_argument("--url", default=None)
     p.add_argument("--config", default=argparse.SUPPRESS)
     p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("runs", help="lista los runs recientes")
+    p.add_argument("--agent", default=None)
+    p.add_argument("--limit", type=int, default=30)
+    p.add_argument("--url", default=None)
+    p.add_argument("--config", default=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_runs)
+
+    p = sub.add_parser("run", help="operaciones detalladas de un run")
+    p.add_argument("id", type=int)
+    p.add_argument("--url", default=None)
+    p.add_argument("--config", default=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("team", help="gestión de equipos")
     p.add_argument("--url", default=None)

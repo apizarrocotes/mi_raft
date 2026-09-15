@@ -32,7 +32,7 @@ class OpencodeServeRuntime(BaseRuntime):
         return RunResult(session_id=None, text=stdout)
 
     async def run_turn(
-        self, agent, prompt: str, session_id: str | None, timeout_s: int
+        self, agent, prompt: str, session_id: str | None, timeout_s: int, event_sink=None
     ) -> RunResult:
         port = agent.server_port or derive_port(agent.name)
         base = f"http://127.0.0.1:{port}/api"
@@ -42,7 +42,7 @@ class OpencodeServeRuntime(BaseRuntime):
         for attempt in range(2):
             try:
                 sid, text = await loop.run_in_executor(
-                    None, self._execute_turn, base, None, prompt, min(timeout_s, 180)
+                    None, self._execute_turn, base, None, prompt, min(timeout_s, 180), event_sink
                 )
                 return RunResult(session_id=sid, text=text)
             except Exception as exc:
@@ -82,7 +82,7 @@ class OpencodeServeRuntime(BaseRuntime):
             return False
 
     def _execute_turn(
-        self, base: str, session_id: str | None, prompt: str, timeout_s: int
+        self, base: str, session_id: str | None, prompt: str, timeout_s: int, event_sink=None
     ) -> tuple[str, str]:
         req = urllib.request.Request(f"{base}/event")
         texts: list[str] = []
@@ -101,6 +101,26 @@ class OpencodeServeRuntime(BaseRuntime):
                 if data.get("sessionID") != sid:
                     continue
                 etype = ev.get("type", "")
+                if event_sink:
+                    try:
+                        if "tool" in etype:
+                            event_sink({
+                                "type": "tool_use",
+                                "tool": data.get("tool") or etype.split(".")[-1],
+                                "payload": data,
+                            })
+                        elif etype.endswith("text.ended"):
+                            event_sink({
+                                "type": "text", "tool": None,
+                                "payload": {"text": data.get("text", "")[:800]},
+                            })
+                        elif etype.endswith(("step.started", "step.ended")):
+                            event_sink({
+                                "type": "step", "tool": None,
+                                "payload": {"event": etype},
+                            })
+                    except Exception:
+                        pass
                 if etype.endswith("text.ended") and isinstance(data.get("text"), str):
                     texts.append(data["text"])
                 elif etype.endswith("step.ended"):

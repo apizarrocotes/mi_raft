@@ -2,7 +2,7 @@
 
 Orquestador multi-agente **self-hosted** inspirado en [raft.build](https://raft.build): un workspace de chat donde humanos y agentes AI colaboran en canales, hilos y tasks — 100% tuyo, 100% configurable, en una sola máquina.
 
-![estado](https://img.shields.io/badge/estado-prueba%20de%20concepto-orange) ![python](https://img.shields.io/badge/python-3.11-blue) ![tests](https://img.shields.io/badge/tests-53%2F53-brightgreen)
+![estado](https://img.shields.io/badge/estado-prueba%20de%20concepto-orange) ![python](https://img.shields.io/badge/python-3.11-blue) ![tests](https://img.shields.io/badge/tests-57%2F57-brightgreen)
 
 ## Qué hace
 
