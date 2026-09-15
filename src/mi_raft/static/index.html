@@ -237,14 +237,23 @@ const S = {
   dms: [],
 };
 const $ = (id) => document.getElementById(id);
+(() => {
+  const qp = new URLSearchParams(location.search).get("api_key");
+  if (qp) { S.key = qp; localStorage.setItem("miraft_key", qp); }
+})();
 const esc = (s) => (s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const mdAvailable = typeof marked !== "undefined" && typeof DOMPurify !== "undefined";
+const mdAvailable =
+  typeof marked !== "undefined" && typeof marked.parse === "function"
+  && typeof DOMPurify !== "undefined" && typeof DOMPurify.sanitize === "function";
 function renderText(m) {
   if (m.author_type === "system") return `<div class="text">${esc(m.text)}</div>`;
-  if (!mdAvailable) return `<div class="text">${esc(m.text)}</div>`;
-  marked.setOptions({ breaks: true, gfm: true });
-  const html = DOMPurify.sanitize(marked.parse(m.text || ""));
-  return `<div class="text md">${html}</div>`;
+  if (mdAvailable) {
+    try {
+      const html = DOMPurify.sanitize(marked.parse(m.text || "", { breaks: true, gfm: true }));
+      if (typeof html === "string" && html.length) return `<div class="text md">${html}</div>`;
+    } catch (e) { console.error("markdown render error", e); }
+  }
+  return `<div class="text">${esc(m.text)}</div>`;
 }
 
 async function api(path, opts = {}) {

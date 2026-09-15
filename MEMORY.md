@@ -118,6 +118,12 @@
 - **Proceso**: jefa parada hasta las 20:10 (cuota). 10 runs pausados con motivo. El equipo sigue en lanes pi/opencode (cuota nan aparte). Al reactivar: basta una mención a la jefa cuando el usuario quiera.
 - Lección: al aparecer fallos en cascada de TODOS los agentes a la vez, buscar límites de infraestructura compartida (buffer sizes, cuotas) antes de causas por agente.
 
+## 2026-09-15 tarde II — Servidor zombie y la web sin actualizar
+- **La web "no actualizaba" porque un server VIEJO seguía dueño del puerto 8504**: los logs mostraban "address already in use" — los reinicios fallaban al bindear y el proceso antiguo (código sin los fixes del día) seguía sirviendo. SIGTERM a uvicorn puede quedar en gracia indefinida si está atascado → verificar SIEMPRE con `ss -lptn sport = :<puerto>` QUÉ PID es dueño, y SIGKILL si es un zombie. Tras reiniciar, validar que el puerto lo tiene el PID nuevo (ficha /vendor o /health + versión).
+- **REGRA ABSOLUTA tras incidente**: jamás matar por patrones genéricos ("uvicorn", "python") — en esta máquina conviven servicios del usuario (growatt :8010, CRM, streamlits 8501/8502). Solo matar procesos verificados como propios por ascendencia/cmdline exacta. Maté por error growatt y el CRM (el usuario perdonó el CRM; growatt tenía watchdog y se re-levantó solo).
+- Los procesos con setsid sobreviven killpg → _kill_tree con barrido de descendientes vía /proc (ya implementado).
+- index.html ahora se sirve con Cache-Control: no-cache (el navegador cacheaba HTML viejo tras los restarts).
+
 ## 2026-09-15 — Equipo ejemplo: sello "Tinta Ardiente" (romance picante KDP)
 - `teams/romanticas/` — puerto 8504, key en su raft.yaml (local, gitignored). 7 agentes (onboarding + 6), 6 canales por lane, 12 aristas de org con la jefa-editorial como hub.
 - Pipeline diseñado: mercado (trendwatcher, opencode+web) → biblia → outline → borradores (novelista, opencode) → edición (editor-fino, claude) → beta (beta-lectora, claude) → paquete KDP (kdp-manager, claude). Escala de picante 1-5 objetivo 4 con límites KDP explícitos en instrucciones. Workspace: manuscrito/ (+ediciones/), biblia/, mercado/, publicacion/.
