@@ -95,6 +95,13 @@
 - **Bug de LIKE mordido**: las escalaciones empiezan con @mención (texto = "@jefa ⚠️...") → `text LIKE '⚠️%'` no matcheaba nunca y el contador anti-bucle no contaba. Fix: escalate() normaliza el formato (⚠️ siempre primero, luego mención). Lección: cuando un formato de mensaje es contracto (prefijo buscable), construirlo en UN solo sitio (escalate), nunca en los callers.
 - El supervisor sigue siendo quien decide (reintentar, reasignar, cerrar) — control de loop cerrado, no autonomía infinita. Cron/autopilots siguen excluidos.
 
+## 2026-09-15 — Catálogo de proveedores/modelos (petición: CLI + proveedor + LLM configurables)
+- **Los CLIs exponen su catálogo**: `opencode models` (69 combos "provider/model"), `pi --list-models` (tabla provider/model/context), claude NO tiene listado (lista curada de Anthropic en catalog.py). catalog.py los llama con caché TTL 300s.
+- **agents.provider** (columna + YAML + PATCH): opencode combina provider/model en `-m provider/model` (si model no trae "/"); pi usa `--provider` + `--model` separados; claude ignora provider (solo anthropic). PATCH valida el modelo contra el catálogo (422 si no existe).
+- La PRIMERA llamada a GET /models tarda varios segundos (ejecuta los CLIs) — luego caché 300s. En curl con -m corto parece colgado; usar margen.
+- En romanticas, trendwatcher y novelista tienen provider nan + glm5.3-flash explícito (antes era el default implícito de opencode).
+- Los agentes del equipo publican por la API con curl (lo aprendieron solos leyendo raft.yaml) — el prompt ahora les enseña a firmar con su author; mensajes anónimos #50/#55 re-atribuidos a novelista en la DB.
+
 ## 2026-09-15 — Equipo ejemplo: sello "Tinta Ardiente" (romance picante KDP)
 - `teams/romanticas/` — puerto 8504, key en su raft.yaml (local, gitignored). 7 agentes (onboarding + 6), 6 canales por lane, 12 aristas de org con la jefa-editorial como hub.
 - Pipeline diseñado: mercado (trendwatcher, opencode+web) → biblia → outline → borradores (novelista, opencode) → edición (editor-fino, claude) → beta (beta-lectora, claude) → paquete KDP (kdp-manager, claude). Escala de picante 1-5 objetivo 4 con límites KDP explícitos en instrucciones. Workspace: manuscrito/ (+ediciones/), biblia/, mercado/, publicacion/.

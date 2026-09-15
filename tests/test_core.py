@@ -1538,3 +1538,30 @@ class TestCatalog:
                                provider="nan", model="nan/glm5.3-flash")
         args2 = OpencodeRuntime().build_args(combined, None)
         assert args2[args2.index("-m") + 1] == "nan/glm5.3-flash"
+
+
+class TestOpencodeLength:
+    def test_length_without_text_clean_error(self):
+        from mi_raft.runtimes.opencode import OpencodeRuntime
+
+        lines = "\n".join([
+            json.dumps({"type": "step_start", "sessionID": "s", "part": {}}),
+            json.dumps({"type": "tool", "sessionID": "s", "part": {
+                "type": "tool", "tool": "write", "callID": "c1",
+                "state": {"status": "completed", "input": {"filePath": "cap02.md", "content": "x"}},
+            }}),
+            json.dumps({"type": "step_finish", "sessionID": "s",
+                        "part": {"reason": "length", "tokens": {"input": 100, "output": 8000}}}),
+        ])
+        with pytest.raises(RuntimeError, match="límite de tokens"):
+            OpencodeRuntime().parse_output(lines)
+
+    def test_length_with_text_returns_partial(self):
+        from mi_raft.runtimes.opencode import OpencodeRuntime
+
+        lines = "\n".join([
+            json.dumps({"type": "text", "sessionID": "s", "part": {"text": "voy por la mitad"}}),
+            json.dumps({"type": "step_finish", "sessionID": "s", "part": {"reason": "length"}}),
+        ])
+        r = OpencodeRuntime().parse_output(lines)
+        assert r.text == "voy por la mitad"

@@ -47,6 +47,7 @@ class OpencodeRuntime(BaseRuntime):
         texts: list[str] = []
         session_id = None
         cost_usd = tokens_in = tokens_out = None
+        finish_reason = None
         for ev in events:
             if session_id is None:
                 session_id = find_first(ev, "sessionID")
@@ -58,6 +59,8 @@ class OpencodeRuntime(BaseRuntime):
                     texts.append(ev["text"])
             if ev.get("type") == "step_finish" or ev.get("type") == "step-finish":
                 part = ev.get("part") or {}
+                if part.get("reason"):
+                    finish_reason = part["reason"]
                 tokens = part.get("tokens") or {}
                 if isinstance(tokens.get("input"), (int, float)):
                     tokens_in = int(tokens["input"])
@@ -67,7 +70,15 @@ class OpencodeRuntime(BaseRuntime):
                     cost_usd = float(part["cost"])
         text = "\n\n".join(t for t in texts if t.strip()).strip()
         if not text:
-            raise RuntimeError(f"opencode no devolvió texto: {stdout[:500]}")
+            if finish_reason == "length":
+                raise RuntimeError(
+                    "opencode agotó el límite de tokens de salida del modelo (razón=length). "
+                    "El trabajo parcial escrito por tools queda guardado en el workspace; "
+                    "continúa en otro turno o reparte el trabajo en trozos menores"
+                )
+            raise RuntimeError(
+                f"opencode no devolvió texto (razón={finish_reason or 'desconocida'})"
+            )
         provider = None
         model = None
         for ev in events:
