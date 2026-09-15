@@ -72,3 +72,10 @@
 - opencode: los tool calls llegan como evento con `part.type == "tool"` (tool: bash, callID, state.input) — parseo defensivo por contener "tool" en el type. pi: blocks con type que contiene "tool" (defensivo, no verificado con tool real). opencode-serve: solo tipos session.next.*; tool events si aparecen.
 - **sink pattern**: runner pasa `event_sink` a run_turn; los fakes de tests necesitan `event_sink=None` en su firma (si no, TypeError). Cada runtime emite {type: tool_use|tool_result|text|step, tool, payload}; payload truncado a 4096 chars en DB.
 - Verificado real: run de opencode con bash captura tool_use con el comando completo, steps y texto.
+
+## 2026-09-15 — Herramientas web para agentes (análisis Raft + implementación)
+- **Modelo de tools en Raft**: vienen del RUNTIME, no de la plataforma ("The runtime determines what tools the agent has access to"). Raft conecta 9 harnesses (Claude Code, Codex, Antigravity, Kimi, Copilot, Cursor, Gemini CLI, OpenCode, Pi). Nuestro modelo espejo: las tools son las del CLI + las que el server expone.
+- **Superficie verificada localmente**: claude tiene WebSearch/WebFetch nativos (en -p con dontAsk hay que permitirlos: --allowedTools WebSearch WebFetch — ahora por defecto si web_search); opencode NO tiene búsqueda nativa (solo webfetch en su API, no flag CLI); pi con allowlist -t (bash opcional). → **Desigualdad resuelta con capa propia del server**: /tools/search + /tools/fetch abiertos (sin auth, para curl de agentes), inyectados en el prompt de todos los runtimes locales.
+- **DDG antibot**: html.duckduckgo.com da 202+challenge a urllib SIEMPRE y a curl en peticiones repetidas (rate limit por IP). Solución: lite.duckduckgo.com/lite/ por POST (funciona) con fallback a html GET + caché 300s por query. Si se degrada, config con provider brave + brave_key (API de pago con tier gratis).
+- /tools/fetch bloquea localhost/loopback/link-local (SSRF) y devuelve texto plano (scripts/estilos fuera, cap 100KB).
+- Verificado E2E: opencode buscó la última versión de Python vía curl a /tools/search con su bash y citó fuentes correctas (3.14.7, agosto 2026).

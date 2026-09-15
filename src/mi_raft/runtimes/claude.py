@@ -16,6 +16,11 @@ class ClaudeRuntime(BaseRuntime):
             args += ["--model", str(agent.model)]
         if agent.budget_usd:
             args += ["--max-budget-usd", str(agent.budget_usd)]
+        allow = agent.permissions.get("allow")
+        if allow:
+            args += ["--allowedTools", *[str(a) for a in allow]]
+        elif agent.web_search:
+            args += ["--allowedTools", "WebSearch", "WebFetch"]
         if session_id:
             args += ["--resume", session_id]
         args += agent.extra_args

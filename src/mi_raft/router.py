@@ -81,6 +81,16 @@ def build_prompt(db, agent, channel_id: str, thread_id: int) -> str:
     if agent.instructions:
         header += f"\n\nInstrucciones:\n{agent.instructions.strip()}"
     header += boundary
+    if agent.web_search and agent.runtime != "external":
+        port = getattr(db, "server_port", None) or 8420
+        header += (
+            f"\n\nBúsqueda web del server (úsala con tu tool de bash cuando necesites "
+            "información externa o actual):\n"
+            f'- Buscar: curl -s "http://127.0.0.1:{port}/tools/search?q=TU+BUSQUEDA"\n'
+            f'  (devuelve JSON con title/url/snippet)\n'
+            f'- Leer una página: curl -s "http://127.0.0.1:{port}/tools/fetch?url=HTTPS..."\n'
+            f"  (devuelve el texto plano de la página)"
+        )
     if agent.memory_file:
         mem_path = Path(agent.memory_file).expanduser()
         content = mem_path.read_text() if mem_path.exists() else "(vacía todavía)"

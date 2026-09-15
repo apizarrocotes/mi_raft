@@ -116,7 +116,7 @@ CREATE INDEX IF NOT EXISTS idx_run_message ON run_message(run_id, seq);
 
 AGENT_COLUMNS = (
     "id, runtime, work_dir, instructions, model, permissions_json, "
-    "extra_args_json, max_concurrent, timeout_s, memory_file, server_port, wake_url, budget_usd, sandbox_json"
+    "extra_args_json, max_concurrent, timeout_s, memory_file, server_port, wake_url, budget_usd, sandbox_json, web_search"
 )
 
 MIGRATIONS = (
@@ -130,6 +130,7 @@ MIGRATIONS = (
     "ALTER TABLE channel ADD COLUMN type TEXT NOT NULL DEFAULT 'channel'",
     "ALTER TABLE channel ADD COLUMN members_json TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE agent ADD COLUMN sandbox_json TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE agent ADD COLUMN web_search INTEGER NOT NULL DEFAULT 1",
 )
 
 class Database:
@@ -143,6 +144,7 @@ class Database:
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.lock = threading.Lock()
         self.on_message_created = None
+        self.server_port: int | None = None
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
@@ -233,7 +235,7 @@ class Database:
     @staticmethod
     def _upsert_agent(conn: sqlite3.Connection, a: AgentConfig) -> None:
         conn.execute(
-            f"INSERT OR REPLACE INTO agent ({AGENT_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT OR REPLACE INTO agent ({AGENT_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 a.name,
                 a.runtime,
@@ -249,6 +251,7 @@ class Database:
                 a.wake_url,
                 a.budget_usd,
                 json.dumps(a.sandbox),
+                1 if a.web_search else 0,
             ),
         )
 
@@ -325,6 +328,7 @@ class Database:
             wake_url=row["wake_url"],
             budget_usd=row["budget_usd"],
             sandbox=json.loads(row["sandbox_json"]) if "sandbox_json" in row.keys() else {},
+            web_search=bool(row["web_search"]) if "web_search" in row.keys() else True,
         )
 
     def list_agents(self) -> list[sqlite3.Row]:

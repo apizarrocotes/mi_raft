@@ -3,9 +3,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import html as _html
 import json
+import re as _re
 import secrets as _secrets
+import shutil
 import threading
+import urllib.parse
 import urllib.request
 from contextlib import asynccontextmanager
 from dataclasses import field
@@ -21,6 +25,112 @@ from .router import route_message
 from .runner import start_runner
 
 STATIC_DIR = Path(__file__).parent / "static"
+def _http_get(url: str, headers: dict | None = None, timeout: int = 15) -> tuple[int, str]:
+    import subprocess
+
+    curl = shutil.which("curl")
+    if curl:
+        cmd = [curl, "-s", "-m", str(timeout), "-w", "\n%{http_code}", "-A", "Mozilla/5.0 (mi_raft)"]
+        for key, value in (headers or {}).items():
+            cmd += ["-H", f"{key}: {value}"]
+        cmd.append(url)
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout + 5)
+        output = result.stdout.decode("utf-8", errors="replace")
+        if "\n" in output:
+            body, _, code = output.rpartition("\n")
+            if code.strip().isdigit():
+                return int(code.strip()), body
+        return 200, output
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (mi_raft)", **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.status, resp.read().decode("utf-8", errors="replace")
+
+
+def _strip_tags(fragment: str) -> str:
+    text = _re.sub(r"<[^>]+>", "", fragment)
+    return _html.unescape(text).strip()
+
+
+_ddg_cache: dict[str, tuple[float, list[dict]]] = {}
+DDG_CACHE_TTL = 300
+
+
+def _ddg_results(q: str, limit: int) -> list[dict]:
+    import time as _time
+
+    key = q.lower().strip()
+    cached = _ddg_cache.get(key)
+    if cached and _time.monotonic() - cached[0] < DDG_CACHE_TTL:
+        return cached[1][:limit]
+
+    out = _ddg_lite(q, limit)
+    if not out:
+        out = _ddg_html(q, limit)
+    _ddg_cache[key] = (_time.monotonic(), out)
+    return out
+
+
+def _ddg_lite(q: str, limit: int) -> list[dict]:
+    import subprocess
+
+    curl = shutil.which("curl")
+    if not curl:
+        return []
+    result = subprocess.run(
+        [curl, "-s", "-m", "15", "-A", "Mozilla/5.0 (mi_raft)",
+         "-d", f"q={urllib.parse.quote(q)}", "https://lite.duckduckgo.com/lite/"],
+        capture_output=True, timeout=20,
+    )
+    html_text = result.stdout.decode("utf-8", errors="replace")
+    anchors = _re.findall(
+        r"<a[^>]*href=\"([^\"]+)\"[^>]*class='result-link'[^>]*>(.*?)</a>", html_text, _re.DOTALL
+    )
+    snippets = _re.findall(
+        r"class='result-snippet'[^>]*>(.*?)</td>", html_text, _re.DOTALL
+    )
+    out: list[dict] = []
+    for i, (href, title) in enumerate(anchors[:limit]):
+        out.append({
+            "title": _strip_tags(title),
+            "url": href,
+            "snippet": _strip_tags(snippets[i]) if i < len(snippets) else "",
+        })
+    return out
+
+
+def _ddg_html(q: str, limit: int) -> list[dict]:
+    _, html_text = _http_get("https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(q))
+    out: list[dict] = []
+    anchors = _re.findall(
+        r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', html_text, _re.DOTALL
+    )
+    snippets = _re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html_text, _re.DOTALL)
+    for i, (href, title) in enumerate(anchors[:limit]):
+        if "uddg=" in href:
+            parsed = urllib.parse.parse_qs(urllib.parse.urlsplit(href).query)
+            href = parsed.get("uddg", [href])[0]
+        out.append({
+            "title": _strip_tags(title),
+            "url": href,
+            "snippet": _strip_tags(snippets[i]) if i < len(snippets) else "",
+        })
+    return out
+
+
+def _brave_results(q: str, limit: int, brave_key: str) -> list[dict]:
+    if not brave_key:
+        raise RuntimeError("brave_key no configurada en raft.yaml")
+    req = urllib.request.Request(
+        "https://api.brave.com/res/v1/web/search?q=" + urllib.parse.quote(q),
+        headers={"X-Subscription-Token": brave_key, "Accept": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read())
+    return [
+        {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("description", "")}
+        for r in (data.get("web", {}).get("results") or [])[:limit]
+    ]
+
 
 
 class MessageIn(BaseModel):
@@ -101,6 +211,7 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
     if stuck:
         print(f"mi_raft: {stuck} run(s) huérfanos marcados como failed")
     db.sync_config(cfg)
+    db.server_port = cfg.server.port
     api_keys = [k for k in cfg.server.api_keys if k]
 
     if db.channel_exists("general") and not db.list_messages_since(0):
@@ -379,6 +490,39 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
             "version": __version__,
             "workspace": cfg.workspace,
         }
+
+    @app.get("/tools/search")
+    def tools_search(q: str, limit: int = 8):
+        if not q.strip():
+            raise HTTPException(422, "q vacía")
+        limit = min(limit, 20)
+        try:
+            if cfg.server.web_search_provider == "brave":
+                results = _brave_results(q, limit, cfg.server.brave_key)
+            else:
+                results = _ddg_results(q, limit)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(502, f"búsqueda falló: {exc}")
+        return {"query": q, "results": results}
+
+    @app.get("/tools/fetch")
+    def tools_fetch(url: str, max_chars: int = 20000):
+        if not url.startswith(("http://", "https://")):
+            raise HTTPException(422, "url debe empezar por http(s)://")
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.hostname in ("127.0.0.1", "localhost", "0.0.0.0") or (parsed.hostname or "").startswith("169.254."):
+            raise HTTPException(400, "fetch de direcciones locales bloqueado")
+        try:
+            _, text = _http_get(url, timeout=20)
+        except Exception as exc:
+            raise HTTPException(502, f"fetch falló: {exc}")
+        text = _re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", text)
+        text = _re.sub(r"(?s)<[^>]+>", " ", text)
+        text = _re.sub(r"\s+", " ", _html.unescape(text)).strip()
+        max_chars = min(max_chars, 100_000)
+        return {"url": url, "chars": len(text), "text": text[:max_chars]}
 
     @app.get("/org", dependencies=[Depends(require_key)])
     def org():

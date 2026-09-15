@@ -25,6 +25,7 @@ class AgentConfig:
     wake_url: str | None = None
     budget_usd: float | None = None
     sandbox: dict = field(default_factory=dict)
+    web_search: bool = True
 
 
 @dataclass
@@ -39,6 +40,8 @@ class ServerConfig:
     port: int = 8420
     db: str = "data/raft.db"
     api_keys: list[str] = field(default_factory=list)
+    web_search_provider: str = "ddg"
+    brave_key: str = ""
 
 
 @dataclass
@@ -112,6 +115,7 @@ def load_config(path: str | Path) -> Config:
                     if item.get("sandbox") is True
                     else (item.get("sandbox") or {})
                 ),
+                web_search=bool(item.get("web_search", True)),
             )
         )
     if not agents:

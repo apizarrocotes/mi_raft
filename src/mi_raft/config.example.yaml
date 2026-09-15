@@ -4,10 +4,16 @@ server:
   db: data/raft.db
   # api_keys:            # si se define al menos una, TODA la API exige
   #   - cambia-esta-clave #   Authorization: Bearer <clave> (o X-mi-raft-key)
+  # web_search_provider: ddg   # ddg (sin clave) | brave
+  # brave_key: ""              # clave de Brave Search API si usas brave
 
 defaults:
   max_concurrent: 1
   timeout_s: 600
+
+# Herramientas web: todos los agentes locales tienen búsqueda web via el server
+# (/tools/search y /tools/fetch, se les inyecta en el prompt). Para desactivarla
+# en un agente: web_search: false
 
 # Por agente (opcionales):
 #   budget_usd: 0.50        # límite de gasto por turno (claude: --max-budget-usd)

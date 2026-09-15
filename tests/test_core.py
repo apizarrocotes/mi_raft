@@ -1198,3 +1198,82 @@ class TestRunTelemetry:
         ops = client.get(f"/runs/{rid}/messages").json()
         assert [o["seq"] for o in ops] == [0, 1]
         assert ops[1]["tool"] == "Bash"
+
+
+class TestWebTools:
+    def test_prompt_includes_web_tools(self, tmp_path):
+        db = make_db(tmp_path)
+        db.server_port = 8420
+        root = db.insert_message("demo", "human", "apc", "@alpha busca en la web")
+        prompt = build_prompt(db, db.get_agent("alpha"), "demo", root)
+        assert "/tools/search" in prompt
+        assert "/tools/fetch" in prompt
+
+    def test_prompt_without_web_tools(self, tmp_path):
+        db = Database(tmp_path / "raft.db")
+        cfg = make_config(
+            [AgentConfig(name="alpha", runtime="claude", work_dir="/tmp", web_search=False)]
+        )
+        db.sync_config(cfg)
+        root = db.insert_message("demo", "human", "apc", "@alpha hola")
+        prompt = build_prompt(db, db.get_agent("alpha"), "demo", root)
+        assert "/tools/search" not in prompt
+
+    def test_claude_allows_web_search_by_default(self):
+        from mi_raft.runtimes.claude import ClaudeRuntime
+
+        args = ClaudeRuntime().build_args(
+            AgentConfig(name="a", runtime="claude", work_dir="/tmp"), None
+        )
+        assert "WebSearch" in args and "WebFetch" in args
+        custom = AgentConfig(
+            name="b", runtime="claude", work_dir="/tmp",
+            permissions={"allow": ["Bash", "Read"]},
+        )
+        args2 = ClaudeRuntime().build_args(custom, None)
+        assert "WebSearch" not in args2 and "Read" in args2
+
+    def test_search_endpoint_with_mocked_ddg(self, tmp_path, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from mi_raft import server as server_mod
+        from mi_raft.server import create_app
+
+        fixture = """
+        <div class="result">
+        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fejemplo.com%2Farticulo">Artículo <b>importante</b></a>
+        <a class="result__snippet" href="#">El resumen del artículo</a>
+        </div>
+        """
+        monkeypatch.setattr(
+            server_mod, "_http_get", lambda url, headers=None, timeout=15: (200, fixture)
+        )
+        monkeypatch.setattr(server_mod, "_ddg_lite", lambda q, limit: [])
+        monkeypatch.setattr(server_mod, "_ddg_cache", {})
+        cfg = make_config()
+        cfg.server.db = str(tmp_path / "raft.db")
+        client = TestClient(create_app(cfg, make_db(tmp_path)))
+        r = client.get("/tools/search", params={"q": "articulo"}).json()
+        assert r["results"][0]["url"] == "https://ejemplo.com/articulo"
+        assert r["results"][0]["title"] == "Artículo importante"
+        assert "resumen" in r["results"][0]["snippet"]
+        assert client.get("/tools/search", params={"q": " "}).status_code == 422
+
+    def test_fetch_endpoint(self, tmp_path, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from mi_raft import server as server_mod
+        from mi_raft.server import create_app
+
+        page = "<html><head><style>x{}</style></head><body><h1>Hola</h1><p>mundo</p><script>bad()</script></body></html>"
+        monkeypatch.setattr(
+            server_mod, "_http_get", lambda url, headers=None, timeout=20: (200, page)
+        )
+        cfg = make_config()
+        cfg.server.db = str(tmp_path / "raft.db")
+        client = TestClient(create_app(cfg, make_db(tmp_path)))
+        r = client.get("/tools/fetch", params={"url": "https://ok.com/pagina"}).json()
+        assert "Hola" in r["text"] and "mundo" in r["text"]
+        assert "bad()" not in r["text"]
+        assert client.get("/tools/fetch", params={"url": "http://127.0.0.1/x"}).status_code == 400
+        assert client.get("/tools/fetch", params={"url": "ftp://x.com"}).status_code == 422
