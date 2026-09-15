@@ -112,6 +112,12 @@
 - **Cosmético pendiente**: el parse_line de pi captura el prompt del usuario como eventos text (op #1/#3) — filtrar role=user en el futuro.
 - **Estado**: server romanticas REINICIADO y operativo con todo M1-M6. Si el coste sigue siendo alto, el siguiente escalón es membresía por canal (Raft-style: los agentes solo escuchan sus lanes).
 
+## 2026-09-15 tarde — Límite de línea + cuota claude de la jefa
+- **Fallo masivo "Separator is not found / chunk longer than limit"**: el StreamReader de asyncio limita las líneas a 64KB — los JSON de pi/claude-stream con outputs de tools grandes las revientan y caían TODOS los agentes. Fix: `limit=64MB` en create_subprocess_exec (base.py). Verificado: novelista-a completó post-fix.
+- **Cuota claude de la jefa**: "You've hit your session limit · resets 8:10pm" (api_error_status 429) — el result event llega AUNQUE exit≠0. diagnose_failure hook en BaseRuntime; claude extrae result.text → escalaciones/mensajes limpios ("claude error API 429: ..."). Red herring: "sdk_opt_in_required" es solo fast_mode_disabled_reason, NO el problema.
+- **Proceso**: jefa parada hasta las 20:10 (cuota). 10 runs pausados con motivo. El equipo sigue en lanes pi/opencode (cuota nan aparte). Al reactivar: basta una mención a la jefa cuando el usuario quiera.
+- Lección: al aparecer fallos en cascada de TODOS los agentes a la vez, buscar límites de infraestructura compartida (buffer sizes, cuotas) antes de causas por agente.
+
 ## 2026-09-15 — Equipo ejemplo: sello "Tinta Ardiente" (romance picante KDP)
 - `teams/romanticas/` — puerto 8504, key en su raft.yaml (local, gitignored). 7 agentes (onboarding + 6), 6 canales por lane, 12 aristas de org con la jefa-editorial como hub.
 - Pipeline diseñado: mercado (trendwatcher, opencode+web) → biblia → outline → borradores (novelista, opencode) → edición (editor-fino, claude) → beta (beta-lectora, claude) → paquete KDP (kdp-manager, claude). Escala de picante 1-5 objetivo 4 con límites KDP explícitos en instrucciones. Workspace: manuscrito/ (+ediciones/), biblia/, mercado/, publicacion/.

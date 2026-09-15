@@ -284,6 +284,14 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
     def index():
         return FileResponse(STATIC_DIR / "index.html")
 
+    VENDOR_FILES = {"marked.min.js", "purify.min.js"}
+
+    @app.get("/vendor/{filename}")
+    def vendor(filename: str):
+        if filename not in VENDOR_FILES:
+            raise HTTPException(404, "fichero no encontrado")
+        return FileResponse(STATIC_DIR / "vendor" / filename)
+
     @app.get("/agents", dependencies=[Depends(require_key)])
     def agents():
         return [dict(r) for r in db.list_agents()]
