@@ -13,7 +13,7 @@ from .runtimes import get_runtime
 log = logging.getLogger("mi_raft.runner")
 
 
-GLOBAL_MAX_INFLIGHT = 4
+GLOBAL_MAX_INFLIGHT = 6
 
 
 async def runner_loop(db: Database, poll_s: float = 0.5) -> None:
@@ -111,7 +111,6 @@ async def execute_external_run(db: Database, run, agent) -> None:
     _fail_run(db, run, agent, "el agente externo no respondió a tiempo")
 
 
-GLOBAL_MAX_INFLIGHT = 4
 def _fail_run(db: Database, run, agent, error: str) -> None:
     db.set_agent_status(agent.name, "error")
     db.finish_run(run["id"], "failed", None, None, None, error)
