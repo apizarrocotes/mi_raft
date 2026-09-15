@@ -1577,3 +1577,29 @@ class TestOpencodeLength:
         ])
         r = OpencodeRuntime().parse_output(lines)
         assert r.text == "voy por la mitad"
+
+
+class TestSupervisorBypass:
+    def test_supervisor_mentions_anyone_without_edge(self, tmp_path):
+        db = make_db(
+            tmp_path,
+            [
+                AgentConfig(name="jefa", runtime="claude", work_dir="/tmp"),
+                AgentConfig(name="escritora", runtime="pi", work_dir="/tmp"),
+            ],
+        )
+        db.escalate_to = "jefa"
+        # el org NO permite jefa → escritora
+        with db.tx() as conn:
+            conn.execute("INSERT INTO org_edge (from_id, to_id) VALUES ('x','y')")
+
+        m = db.insert_message("demo", "agent", "jefa", "@escritora micro-fix urgente")
+        runs = route_message(db, m)
+        assert len(runs) == 1
+        run = db.conn.execute("SELECT * FROM run WHERE id=?", (runs[0],)).fetchone()
+        assert run["agent_id"] == "escritora"
+
+        # un agente normal sí se le bloquea
+        db.create_agent(AgentConfig(name="otro", runtime="pi", work_dir="/tmp"))
+        m2 = db.insert_message("demo", "agent", "escritora", "@otro hazlo")
+        assert route_message(db, m2) == []

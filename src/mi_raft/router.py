@@ -66,9 +66,14 @@ def route_message(db: Database, message_id: int) -> list[int]:
     if author is not None and db.count_agent_messages_in_thread(msg["thread_id"]) >= MAX_AGENT_REPLIES_PER_THREAD:
         return []
 
+    is_supervisor = author is not None and author == db.escalate_to
     run_ids: list[int] = []
     for agent_id in sorted(mentioned):
-        if author is not None and not db.org_allows(author, agent_id):
+        if (
+            author is not None
+            and not is_supervisor
+            and not db.org_allows(author, agent_id)
+        ):
             db.insert_message(
                 msg["channel_id"],
                 "system",

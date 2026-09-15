@@ -112,6 +112,13 @@
 - **Cosmético pendiente**: el parse_line de pi captura el prompt del usuario como eventos text (op #1/#3) — filtrar role=user en el futuro.
 - **Estado**: server romanticas REINICIADO y operativo con todo M1-M6. Si el coste sigue siendo alto, el siguiente escalón es membresía por canal (Raft-style: los agentes solo escuchan sus lanes).
 
+## 2026-09-15 — El bug del timeline vacío (resuelto)
+- **Síntoma**: ni los mensajes del humano ni los de los agentes aparecían en la web (pero estaban en la DB y los agentes los recibían).
+- **Causa raíz**: al servir /vendor (marked v12), renderText pasó a la rama markdown que llamaba `marked.setOptions(...)` — **inexistente como método del singleton en marked v12** → CADA render() lanzaba excepción → la timeline jamás se pintaba. Antes se veía todo porque /vendor daba 404 y caía en texto plano (el vendor 404 enmascaraba este bug).
+- **Fix**: renderText blindado — capability check (marked.parse + DOMPurify.sanitize), opciones INLINE en parse (no setOptions), try/catch con fallback a texto plano. Lección: un fallback silencioso (vendor 404 → texto plano) enmascaró el bug durante horas; al arreglar el 404 se activó. Siempre testear la rama "buena" de un fallback.
+- **Diagnóstico sin X**: el chromium headless no arranca sin libatk/libcups (no sudo) — el testing de UI se hace por análisis estático + node --check + simulación con vm de node (con sandbox correcto: no inyectar globalThis manual).
+- **Limpieza pedida por el usuario**: 559 mensajes de #manuscrito borrados (canal reiniciado). La biblia, outline, ediciones y el tablero espejo sobreviven en el workspace (biblia/estado-manuscrito.md).
+
 ## 2026-09-15 tarde — Límite de línea + cuota claude de la jefa
 - **Fallo masivo "Separator is not found / chunk longer than limit"**: el StreamReader de asyncio limita las líneas a 64KB — los JSON de pi/claude-stream con outputs de tools grandes las revientan y caían TODOS los agentes. Fix: `limit=64MB` en create_subprocess_exec (base.py). Verificado: novelista-a completó post-fix.
 - **Cuota claude de la jefa**: "You've hit your session limit · resets 8:10pm" (api_error_status 429) — el result event llega AUNQUE exit≠0. diagnose_failure hook en BaseRuntime; claude extrae result.text → escalaciones/mensajes limpios ("claude error API 429: ..."). Red herring: "sdk_opt_in_required" es solo fast_mode_disabled_reason, NO el problema.
