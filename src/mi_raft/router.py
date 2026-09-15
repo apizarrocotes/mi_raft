@@ -112,9 +112,20 @@ def build_prompt(db, agent, channel_id: str, thread_id: int) -> str:
             f"\n\nBúsqueda web del server (úsala con tu tool de bash cuando necesites "
             "información externa o actual):\n"
             f'- Buscar: curl -s "http://127.0.0.1:{port}/tools/search?q=TU+BUSQUEDA"\n'
-            f'  (devuelve JSON con title/url/snippet)\n'
+            f"  (devuelve JSON con title/url/snippet)\n"
             f'- Leer una página: curl -s "http://127.0.0.1:{port}/tools/fetch?url=HTTPS..."\n'
             f"  (devuelve el texto plano de la página)"
+        )
+    if agent.runtime != "external":
+        port = getattr(db, "server_port", None) or 8420
+        header += (
+            f"\n\nPublicar mensajes tú misma por la API (updates intermedios): incluye "
+            f"SIEMPRE tu identidad en author (\"{agent.name}\"), si no aparecerás como humano:\n"
+            f'curl -s -X POST "http://127.0.0.1:{port}/channels/<canal>/messages" '
+            f'-H "Content-Type: application/json" -H "Authorization: Bearer $MIRAFT_KEY" '
+            f'-d \'{{"author": "{agent.name}", "text": "tu mensaje"}}\'\n'
+            "(La clave del server está en el raft.yaml del equipo, dos niveles arriba de "
+            "tu work_dir. Escapa las comillas si lo lanzas dentro de otro comando bash.)"
         )
     if agent.memory_file:
         mem_path = Path(agent.memory_file).expanduser()

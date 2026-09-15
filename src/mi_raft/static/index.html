@@ -728,7 +728,7 @@ async function renderTeam() {
     } catch (e) { if (e.message !== "401") alert(e.message); }
   };
   view.querySelectorAll("[data-agent]").forEach(row => {
-    row.onclick = () => showMemory(row.dataset.agent).catch(() => {});
+    row.onclick = () => showProfile(row.dataset.agent).catch(() => {});
   });
 }
 
@@ -746,50 +746,81 @@ async function loadUsage() {
            : '<div style="color:var(--muted)">sin datos aún</div>'}`;
 }
 
-async function showMemory(agentId) {
-  const [mem, agents] = await Promise.all([
-    api(`/agents/${encodeURIComponent(agentId)}/memory`),
-    api("/agents"),
-  ]);
-  const agent = agents.find(a => a.id === agentId) || {};
+async function showProfile(agentId) {
+  const p = await api(`/agents/${encodeURIComponent(agentId)}/profile`);
   const right = $("team-right");
   if (!right) return;
+  const models = p.models_used.map(m =>
+    `<div class="agent-row"><span><code>${esc(m.provider || "?")} / ${esc(m.model || "?")}</code></span>
+     <span class="rt">${m.runs} runs · $${(m.cost_usd ?? 0).toFixed(4)}</span></div>`).join("")
+    || '<div style="color:var(--muted);font-size:12px">sin runs con modelo registrado</div>';
+  const runs = p.recent_runs.map(r => `
+    <div class="agent-row"><span><b>#${r.id}</b> <span class="rt">${esc(r.channel_id)}</span></span>
+      <span class="rt"><span class="badge ${r.status === "done" ? "done" : r.status === "running" ? "in_progress" : r.status === "failed" ? "cancelled" : "todo"}">${r.status}</span>
+      ${r.model ? `<code style="font-size:10px">${esc(r.model)}</code>` : ""} ${r.cost_usd != null ? "$" + r.cost_usd.toFixed(4) : ""}</span></div>`).join("")
+    || '<div style="color:var(--muted);font-size:12px">sin runs</div>';
+  const perm = p.permissions || {};
   right.innerHTML = `
-    <h3>${esc(agentId)} — memoria y ajustes</h3>
-    <div style="color:var(--muted);font-size:11px;margin-bottom:8px">${esc(mem.memory_file || "sin fichero de memoria — se creará al guardar")}</div>
-    <textarea id="mem-editor" style="min-height:160px;font-family:ui-monospace,monospace">${esc(mem.content ?? "")}</textarea>
-    <div style="display:flex;gap:8px;margin:8px 0">
-      <button class="btn" id="mem-save">Guardar memoria</button>
-      <button class="btn ghost" id="mem-back">Volver</button>
-    </div>
-    <h3 style="margin-top:10px">Ajustes del agente</h3>
-    <textarea id="ag-ed-instructions" placeholder="instrucciones…">${esc(agent.instructions || "")}</textarea>
-    <input id="ag-ed-model" placeholder="modelo (opcional)" value="${esc(agent.model || "")}">
-    <input id="ag-ed-mode" placeholder="permisos: mode (ej. auto/dontAsk)" value="${esc(agent.permissions?.mode || "")}">
-    <button class="btn" id="ag-ed-save">Guardar ajustes</button>`;
-  $("mem-save").onclick = async () => {
-    try {
-      await api(`/agents/${encodeURIComponent(agentId)}/memory`, {
-        method: "PUT",
-        body: JSON.stringify({ content: $("mem-editor").value }),
-      });
-      renderTeam(); renderAgents();
-    } catch (e) { if (e.message !== "401") alert(e.message); }
-  };
+    <h3>${esc(p.id)} <span class="rt">${esc(p.runtime)}</span></h3>
+    <div style="margin:6px 0"><span class="badge ${p.status === "working" ? "in_progress" : p.status === "error" ? "cancelled" : p.status === "idle" ? "done" : "todo"}">${p.status}</span></div>
+
+    <h3 style="margin-top:10px">Modelo</h3>
+    <div class="agent-row"><span>configurado</span><span class="rt">${esc(p.model || "(por defecto del runtime)")}</span></div>
+    ${models}
+
+    <h3 style="margin-top:12px">Organigrama</h3>
+    <div style="font-size:12px">delega a: <b>${esc((p.org.delega_a || []).join(", ") || "—")}</b></div>
+    <div style="font-size:12px">recibe de: <b>${esc((p.org.recibe_de || []).join(", ") || "—")}</b></div>
+
+    <h3 style="margin-top:12px">Configuración</h3>
+    <div class="agent-row"><span>work_dir</span><span class="rt">${esc(p.work_dir)}</span></div>
+    <div class="agent-row"><span>timeout</span><span class="rt">${p.timeout_s}s</span></div>
+    <div class="agent-row"><span>budget</span><span class="rt">${p.budget_usd ? "$" + p.budget_usd : "—"}</span></div>
+    <div class="agent-row"><span>permisos</span><span class="rt">${esc(perm.mode || JSON.stringify(perm).slice(0, 40))}</span></div>
+    <div class="agent-row"><span>búsqueda web</span><span class="rt">${p.web_search ? "sí" : "no"}</span></div>
+    <div class="agent-row"><span>sandbox</span><span class="rt">${p.sandbox?.enable ? "bwrap" : "off"}</span></div>
+    <div class="agent-row"><span>memoria</span><span class="rt">${p.memory_file ? esc(p.memory_file.split("/").pop()) + " (" + p.memory_bytes + " B)" : "—"}</span></div>
+    <div class="agent-row"><span>stats</span><span class="rt">${p.stats.runs} runs · $${(p.stats.cost_usd ?? 0).toFixed(4)}</span></div>
+
+    <h3 style="margin-top:12px">Runs recientes</h3>
+    ${runs}
+
+    <details style="margin-top:12px"><summary style="cursor:pointer;color:var(--accent)">instrucciones</summary>
+      <textarea id="ag-ed-instructions" style="min-height:110px;margin-top:6px">${esc(p.instructions || "")}</textarea>
+      <button class="btn" id="ag-ed-save" style="margin-top:6px">Guardar instrucciones + modelo</button>
+      <input id="ag-ed-model" placeholder="modelo (opcional)" value="${esc(p.model || "")}" style="margin-top:6px">
+    </details>
+
+    <details style="margin-top:8px"><summary style="cursor:pointer;color:var(--accent)">memoria</summary>
+      <div style="color:var(--muted);font-size:11px;margin:4px 0">${esc(p.memory_file || "sin fichero — se creará al guardar")}</div>
+      <textarea id="mem-editor" style="min-height:120px;font-family:ui-monospace,monospace"></textarea>
+      <button class="btn" id="mem-save" style="margin-top:6px">Guardar memoria</button>
+    </details>
+
+    <button class="btn ghost" id="mem-back" style="margin-top:12px">Volver</button>`;
+
+  const mem = await api(`/agents/${encodeURIComponent(agentId)}/memory`);
+  $("mem-editor").value = mem.content ?? "";
+
   $("ag-ed-save").onclick = async () => {
-    const perms = { ...(agent.permissions || {}) };
-    const mode = $("ag-ed-mode").value.trim();
-    if (mode) perms.mode = mode; else delete perms.mode;
     try {
       await api(`/agents/${encodeURIComponent(agentId)}`, {
         method: "PATCH",
         body: JSON.stringify({
           instructions: $("ag-ed-instructions").value,
           model: $("ag-ed-model").value.trim() || null,
-          permissions: perms,
         }),
       });
-      renderTeam(); renderAgents();
+      showProfile(agentId); renderAgents();
+    } catch (e) { if (e.message !== "401") alert(e.message); }
+  };
+  $("mem-save").onclick = async () => {
+    try {
+      await api(`/agents/${encodeURIComponent(agentId)}/memory`, {
+        method: "PUT",
+        body: JSON.stringify({ content: $("mem-editor").value }),
+      });
+      showProfile(agentId); renderAgents();
     } catch (e) { if (e.message !== "401") alert(e.message); }
   };
   $("mem-back").onclick = () => renderTeam();

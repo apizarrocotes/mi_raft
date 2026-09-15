@@ -483,6 +483,35 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
         dispatch_webhooks("task.updated", dict(db.get_task(parent)))
         return {"parent_id": parent, "subtasks": [dict(s) for s in subtasks]}
 
+    @app.get("/agents/{agent_id}/profile", dependencies=[Depends(require_key)])
+    def agent_profile(agent_id: str):
+        row = db.get_agent_row(agent_id)
+        if row is None:
+            raise HTTPException(404, f"Agente {agent_id} no existe")
+        edges_out = [e["to_id"] for e in db.org_edges() if e["from_id"] == agent_id]
+        edges_in = [e["from_id"] for e in db.org_edges() if e["to_id"] == agent_id]
+        memory_path = Path(row["memory_file"]).expanduser() if row["memory_file"] else None
+        stats = db.agent_stats(agent_id)
+        return {
+            "id": row["id"],
+            "runtime": row["runtime"],
+            "status": row["status"],
+            "work_dir": row["work_dir"],
+            "model": row["model"],
+            "instructions": row["instructions"],
+            "permissions": json.loads(row["permissions_json"]),
+            "memory_file": row["memory_file"],
+            "memory_bytes": memory_path.stat().st_size if memory_path and memory_path.exists() else 0,
+            "timeout_s": row["timeout_s"],
+            "budget_usd": row["budget_usd"],
+            "sandbox": json.loads(row["sandbox_json"]) if "sandbox_json" in row.keys() else {},
+            "web_search": bool(row["web_search"]) if "web_search" in row.keys() else True,
+            "org": {"delega_a": edges_out, "recibe_de": edges_in},
+            "models_used": [dict(m) for m in db.agent_models(agent_id)],
+            "stats": dict(stats),
+            "recent_runs": [dict(r) for r in db.recent_runs(agent_id, limit=5)],
+        }
+
     @app.get("/meta")
     def meta():
         from . import __version__

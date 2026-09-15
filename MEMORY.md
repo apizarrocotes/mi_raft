@@ -87,6 +87,14 @@
 - **Patrón anti-timeout que funcionó**: turno incremental (máx 5 búsquedas, guardar informe parcial SIEMPRE, avisar en canal para continuar) + timeout_s 900 para research. El informe v1 quedó en mercado/ con fuentes y pendientes marcados, y el agente preguntó al humano una decisión de producto (¿español o bilingüe?).
 - pgrep en este host a veces cuelga el shell — inspeccionar procesos leyendo /proc directamente con python.
 
+## 2026-09-15 — Control de proceso (pregunta clave del usuario)
+- Pregunta: "¿cómo garantizan estos sistemas que el proceso se mantiene y no se para?" Respuesta implementada (3 piezas, in-process, sin cron):
+  1. **Escalación a supervisor** (`escalate_to` en raft.yaml): fallos de run, handoffs bloqueados por org y runs atascados publican mensaje con @mención al supervisor y se ENRUTAN como runs — el pipeline nunca se para en silencio. Guardias: el supervisor no se auto-escala a sí mismo, máx 3 escalaciones por hilo (anti-bucle).
+  2. **Watchdog** (watchdog_loop cada 60s): termina runs 'running' que superan timeout+gracia 120s y escala.
+  3. **Ligazón con tasks**: la escalación indica la task afectada del hilo (task_for_thread).
+- **Bug de LIKE mordido**: las escalaciones empiezan con @mención (texto = "@jefa ⚠️...") → `text LIKE '⚠️%'` no matcheaba nunca y el contador anti-bucle no contaba. Fix: escalate() normaliza el formato (⚠️ siempre primero, luego mención). Lección: cuando un formato de mensaje es contracto (prefijo buscable), construirlo en UN solo sitio (escalate), nunca en los callers.
+- El supervisor sigue siendo quien decide (reintentar, reasignar, cerrar) — control de loop cerrado, no autonomía infinita. Cron/autopilots siguen excluidos.
+
 ## 2026-09-15 — Equipo ejemplo: sello "Tinta Ardiente" (romance picante KDP)
 - `teams/romanticas/` — puerto 8504, key en su raft.yaml (local, gitignored). 7 agentes (onboarding + 6), 6 canales por lane, 12 aristas de org con la jefa-editorial como hub.
 - Pipeline diseñado: mercado (trendwatcher, opencode+web) → biblia → outline → borradores (novelista, opencode) → edición (editor-fino, claude) → beta (beta-lectora, claude) → paquete KDP (kdp-manager, claude). Escala de picante 1-5 objetivo 4 con límites KDP explícitos en instrucciones. Workspace: manuscrito/ (+ediciones/), biblia/, mercado/, publicacion/.

@@ -131,6 +131,8 @@ MIGRATIONS = (
     "ALTER TABLE channel ADD COLUMN members_json TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE agent ADD COLUMN sandbox_json TEXT NOT NULL DEFAULT '{}'",
     "ALTER TABLE agent ADD COLUMN web_search INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE run ADD COLUMN provider TEXT",
+    "ALTER TABLE run ADD COLUMN model TEXT",
 )
 
 class Database:
@@ -549,13 +551,16 @@ class Database:
         cost_usd: float | None = None,
         tokens_in: int | None = None,
         tokens_out: int | None = None,
+        provider: str | None = None,
+        model: str | None = None,
     ) -> None:
         with self.tx() as conn:
             conn.execute(
                 "UPDATE run SET status=?, session_id=?, work_dir=?, result_text=?,"
-                " error=?, cost_usd=?, tokens_in=?, tokens_out=?, finished_at=datetime('now')"
-                " WHERE id=?",
-                (status, session_id, work_dir, result_text, error, cost_usd, tokens_in, tokens_out, run_id),
+                " error=?, cost_usd=?, tokens_in=?, tokens_out=?, provider=?, model=?,"
+                " finished_at=datetime('now') WHERE id=?",
+                (status, session_id, work_dir, result_text, error, cost_usd, tokens_in,
+                 tokens_out, provider, model, run_id),
             )
 
     def set_agent_status(self, agent_id: str, status: str) -> None:
@@ -578,13 +583,13 @@ class Database:
         if agent_id:
             return self.conn.execute(
                 "SELECT id, agent_id, status, channel_id, thread_id, cost_usd, tokens_in,"
-                " tokens_out, error, created_at, started_at, finished_at"
+                " tokens_out, error, created_at, started_at, finished_at, provider, model"
                 " FROM run WHERE agent_id = ? ORDER BY id DESC LIMIT ?",
                 (agent_id, limit),
             ).fetchall()
         return self.conn.execute(
             "SELECT id, agent_id, status, channel_id, thread_id, cost_usd, tokens_in,"
-            " tokens_out, error, created_at, started_at, finished_at"
+            " tokens_out, error, created_at, started_at, finished_at, provider, model"
             " FROM run ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -611,6 +616,22 @@ class Database:
             " AND r.started_at < datetime('now', '-' || (a.timeout_s + ?) || ' seconds')",
             (grace_s,),
         ).fetchall()
+
+    def agent_models(self, agent_id: str) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT provider, model, COUNT(*) AS runs, SUM(cost_usd) AS cost_usd"
+            " FROM run WHERE agent_id = ? AND model IS NOT NULL"
+            " GROUP BY provider, model ORDER BY MAX(id) DESC LIMIT 5",
+            (agent_id,),
+        ).fetchall()
+
+    def agent_stats(self, agent_id: str) -> sqlite3.Row:
+        return self.conn.execute(
+            "SELECT COUNT(*) AS runs, SUM(cost_usd) AS cost_usd,"
+            " SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out"
+            " FROM run WHERE agent_id = ? AND status = 'done'",
+            (agent_id,),
+        ).fetchone()
 
     def usage_by_agent(self) -> list[sqlite3.Row]:
         return self.conn.execute(

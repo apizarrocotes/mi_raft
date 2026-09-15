@@ -81,9 +81,17 @@ class PiRuntime(BaseRuntime):
                 cost_usd = float(usage["cost"])
         if not answer:
             raise RuntimeError(f"pi no devolvió respuesta de asistente: {stdout[:500]}")
+        provider = None
+        model = None
+        for ev in events:
+            if model is None:
+                model = find_first(ev, "modelID") or find_first(ev, "model")
+            if provider is None:
+                provider = find_first(ev, "providerID") or find_first(ev, "provider")
         return RunResult(
             session_id=session_id, text=answer,
             cost_usd=cost_usd, tokens_in=tokens_in, tokens_out=tokens_out,
+            provider=provider, model=model,
         )
 
 

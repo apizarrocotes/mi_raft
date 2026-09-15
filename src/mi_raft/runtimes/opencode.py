@@ -65,9 +65,17 @@ class OpencodeRuntime(BaseRuntime):
         text = "\n\n".join(t for t in texts if t.strip()).strip()
         if not text:
             raise RuntimeError(f"opencode no devolvió texto: {stdout[:500]}")
+        provider = None
+        model = None
+        for ev in events:
+            if model is None:
+                model = find_first(ev, "modelID")
+            if provider is None:
+                provider = find_first(ev, "providerID")
         return RunResult(
             session_id=session_id, text=text,
             cost_usd=cost_usd, tokens_in=tokens_in, tokens_out=tokens_out,
+            provider=provider, model=model,
         )
 
 

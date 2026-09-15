@@ -63,6 +63,7 @@ async def execute_run(db: Database, run) -> None:
     db.finish_run(
         run["id"], "done", result.session_id, agent.work_dir, result.text, None,
         cost_usd=result.cost_usd, tokens_in=result.tokens_in, tokens_out=result.tokens_out,
+        provider=result.provider, model=result.model,
     )
     db.set_agent_status(agent.name, "idle")
     reply_id = db.insert_message(

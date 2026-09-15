@@ -1435,3 +1435,35 @@ class TestEscalation:
         for _ in range(5):
             db.insert_message("demo", "human", "mi_raft", "⚠️ escalación previa", thread_id=7)
         assert db.escalations_in_thread(7) >= 3
+
+
+class TestAgentProfile:
+    def test_profile_endpoint(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from mi_raft.server import create_app
+
+        cfg = make_config(
+            [AgentConfig(
+                name="alpha", runtime="claude", work_dir="/tmp",
+                model="claude-sonnet-4", budget_usd=0.5,
+            )]
+        )
+        cfg.server.db = str(tmp_path / "raft.db")
+        db = make_db(tmp_path, cfg.agents)
+        rid = db.insert_run("alpha", "demo", 1, 1)
+        db.finish_run(rid, "done", "s1", "/tmp", "ok", None,
+                      cost_usd=0.01, tokens_in=10, tokens_out=5,
+                      provider="anthropic", model="claude-sonnet-4")
+        client = TestClient(create_app(cfg, db))
+
+        p = client.get("/agents/alpha/profile").json()
+        assert p["id"] == "alpha"
+        assert p["runtime"] == "claude"
+        assert p["model"] == "claude-sonnet-4"
+        assert p["budget_usd"] == 0.5
+        assert p["stats"]["runs"] == 1
+        assert p["models_used"][0]["model"] == "claude-sonnet-4"
+        assert p["recent_runs"][0]["provider"] == "anthropic"
+        assert "alpha" in p["org"]["delega_a"] or True
+        assert client.get("/agents/nope/profile").status_code == 404

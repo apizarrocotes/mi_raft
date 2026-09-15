@@ -69,6 +69,8 @@ class ClaudeRuntime(BaseRuntime):
                     cost_usd=obj.get("total_cost_usd"),
                     tokens_in=usage.get("input_tokens"),
                     tokens_out=usage.get("output_tokens"),
+                    provider="anthropic",
+                    model=_claude_model(obj),
                 )
         try:
             obj = json.loads(stdout)
@@ -84,7 +86,18 @@ class ClaudeRuntime(BaseRuntime):
             cost_usd=obj.get("total_cost_usd"),
             tokens_in=usage.get("input_tokens"),
             tokens_out=usage.get("output_tokens"),
+            provider="anthropic",
+            model=_claude_model(obj),
         )
+
+
+def _claude_model(obj: dict) -> str | None:
+        if isinstance(obj.get("model"), str):
+            return obj["model"]
+        model_usage = obj.get("modelUsage")
+        if isinstance(model_usage, dict) and model_usage:
+            return next(iter(model_usage))
+        return None
 
 
 def _claude_events(line: str):
