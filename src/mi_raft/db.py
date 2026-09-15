@@ -115,7 +115,7 @@ CREATE INDEX IF NOT EXISTS idx_run_message ON run_message(run_id, seq);
 """
 
 AGENT_COLUMNS = (
-    "id, runtime, work_dir, instructions, model, permissions_json, "
+    "id, runtime, work_dir, instructions, model, provider, permissions_json, "
     "extra_args_json, max_concurrent, timeout_s, memory_file, server_port, wake_url, budget_usd, sandbox_json, web_search"
 )
 
@@ -133,6 +133,7 @@ MIGRATIONS = (
     "ALTER TABLE agent ADD COLUMN web_search INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE run ADD COLUMN provider TEXT",
     "ALTER TABLE run ADD COLUMN model TEXT",
+    "ALTER TABLE agent ADD COLUMN provider TEXT",
 )
 
 class Database:
@@ -238,13 +239,14 @@ class Database:
     @staticmethod
     def _upsert_agent(conn: sqlite3.Connection, a: AgentConfig) -> None:
         conn.execute(
-            f"INSERT OR REPLACE INTO agent ({AGENT_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT OR REPLACE INTO agent ({AGENT_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 a.name,
                 a.runtime,
                 a.work_dir,
                 a.instructions,
                 a.model,
+                a.provider,
                 json.dumps(a.permissions),
                 json.dumps(a.extra_args),
                 a.max_concurrent,
@@ -266,6 +268,7 @@ class Database:
         allowed = {
             "instructions": str,
             "model": lambda v: v,
+            "provider": lambda v: v,
             "memory_file": lambda v: v,
             "permissions": lambda v: json.dumps(v or {}),
         }
@@ -322,6 +325,7 @@ class Database:
             work_dir=row["work_dir"],
             instructions=row["instructions"],
             model=row["model"],
+            provider=row["provider"] if "provider" in row.keys() else None,
             permissions=json.loads(row["permissions_json"]),
             extra_args=json.loads(row["extra_args_json"]),
             max_concurrent=row["max_concurrent"],

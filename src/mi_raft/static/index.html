@@ -764,9 +764,12 @@ async function showProfile(agentId) {
     <h3>${esc(p.id)} <span class="rt">${esc(p.runtime)}</span></h3>
     <div style="margin:6px 0"><span class="badge ${p.status === "working" ? "in_progress" : p.status === "error" ? "cancelled" : p.status === "idle" ? "done" : "todo"}">${p.status}</span></div>
 
-    <h3 style="margin-top:10px">Modelo</h3>
-    <div class="agent-row"><span>configurado</span><span class="rt">${esc(p.model || "(por defecto del runtime)")}</span></div>
+    <h3 style="margin-top:10px">Modelo <span class="rt">(proveedor / modelo — catálogo de ${esc(p.runtime)})</span></h3>
     ${models}
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <select id="ag-ed-provider" style="flex:1"><option value="">(por defecto)</option></select>
+      <select id="ag-ed-model" style="flex:1"><option value="">(por defecto)</option></select>
+    </div>
 
     <h3 style="margin-top:12px">Organigrama</h3>
     <div style="font-size:12px">delega a: <b>${esc((p.org.delega_a || []).join(", ") || "—")}</b></div>
@@ -802,6 +805,25 @@ async function showProfile(agentId) {
   const mem = await api(`/agents/${encodeURIComponent(agentId)}/memory`);
   $("mem-editor").value = mem.content ?? "";
 
+  const catalog = await api("/models").catch(() => ({}));
+  const cat = catalog[p.runtime] || { providers: [], models: [] };
+  const provSel = $("ag-ed-provider");
+  const modSel = $("ag-ed-model");
+  const currentProvider = p.provider || "";
+  const currentModel = p.model || "";
+  provSel.replaceChildren(...[["", "(por defecto)"], ...cat.providers.map(pr => [pr, pr])]
+    .map(([v, label]) => { const o = document.createElement("option"); o.value = v; o.textContent = label; return o; }));
+  function fillModels(provider) {
+    const list = provider ? cat.models.filter(m => m.provider === provider).map(m => m.model)
+                          : [...new Set(cat.models.map(m => m.model))];
+    modSel.replaceChildren(...[["", "(por defecto)"], ...list.map(mo => [mo, mo])]
+      .map(([v, label]) => { const o = document.createElement("option"); o.value = v; o.textContent = label; return o; }));
+    if (currentModel && list.includes(currentModel)) modSel.value = currentModel;
+  }
+  provSel.value = currentProvider;
+  fillModels(currentProvider);
+  provSel.onchange = () => fillModels(provSel.value);
+
   $("ag-ed-save").onclick = async () => {
     try {
       await api(`/agents/${encodeURIComponent(agentId)}`, {
@@ -809,6 +831,7 @@ async function showProfile(agentId) {
         body: JSON.stringify({
           instructions: $("ag-ed-instructions").value,
           model: $("ag-ed-model").value.trim() || null,
+          provider: $("ag-ed-provider").value.trim() || null,
         }),
       });
       showProfile(agentId); renderAgents();

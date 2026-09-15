@@ -260,6 +260,19 @@ def cmd_run(args) -> None:
         print(f"[{op['seq']:>3}] {op['type']}{tool}: {op['payload_json'][:140]}")
 
 
+def cmd_models(args) -> None:
+    from .catalog import full_catalog
+
+    catalog = full_catalog()
+    runtimes = [args.runtime] if args.runtime else list(catalog)
+    for rt in runtimes:
+        print(f"== {rt} ==")
+        for m in catalog.get(rt, []):
+            print(f"  {m['provider']}/{m['model']}")
+        if not catalog.get(rt):
+            print("  (catálogo no disponible)")
+
+
 def cmd_agents(args) -> None:
     out = _http_json("GET", f"{_server_url(args)}/agents", key=_api_key(args))
     for a in out:
@@ -429,6 +442,10 @@ def main(argv=None) -> None:
     p.add_argument("--url", default=None)
     p.add_argument("--config", default=argparse.SUPPRESS)
     p.set_defaults(func=cmd_runs)
+
+    p = sub.add_parser("models", help="catálogo de proveedores/modelos por runtime")
+    p.add_argument("--runtime", default=None, choices=["claude", "opencode", "pi"])
+    p.set_defaults(func=cmd_models)
 
     p = sub.add_parser("run", help="operaciones detalladas de un run")
     p.add_argument("id", type=int)

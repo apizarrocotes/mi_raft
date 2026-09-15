@@ -16,6 +16,7 @@ class AgentConfig:
     work_dir: str
     instructions: str = ""
     model: str | None = None
+    provider: str | None = None
     permissions: dict = field(default_factory=dict)
     extra_args: list[str] = field(default_factory=list)
     max_concurrent: int = 1
@@ -103,6 +104,7 @@ def load_config(path: str | Path) -> Config:
                 work_dir=str(work_dir),
                 instructions=item.get("instructions") or "",
                 model=item.get("model"),
+                provider=item.get("provider"),
                 permissions=item.get("permissions") or {},
                 extra_args=[str(a) for a in (item.get("extra_args") or [])],
                 max_concurrent=int(item.get("max_concurrent", defaults.get("max_concurrent", 1))),

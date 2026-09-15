@@ -11,6 +11,8 @@ class PiRuntime(BaseRuntime):
         tools = agent.permissions.get("tools")
         if tools:
             args += ["-t", ",".join(str(t) for t in tools)]
+        if agent.provider:
+            args += ["--provider", str(agent.provider)]
         if agent.model:
             args += ["--model", str(agent.model)]
         if session_id:

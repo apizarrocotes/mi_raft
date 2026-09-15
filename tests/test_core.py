@@ -1467,3 +1467,74 @@ class TestAgentProfile:
         assert p["recent_runs"][0]["provider"] == "anthropic"
         assert "alpha" in p["org"]["delega_a"] or True
         assert client.get("/agents/nope/profile").status_code == 404
+
+
+class TestCatalog:
+    def test_opencode_parse(self, monkeypatch):
+        import mi_raft.catalog as catalog
+
+        monkeypatch.setattr(catalog, "_run", lambda cmd, timeout=30: (
+            "nan/glm5.3-flash\nanthropic/claude-sonnet-4\nmalo\n"
+        ))
+        out = catalog.opencode_catalog()
+        assert {"provider": "nan", "model": "glm5.3-flash"} in out
+        assert {"provider": "anthropic", "model": "claude-sonnet-4"} in out
+        assert len(out) == 2
+
+    def test_pi_parse(self, monkeypatch):
+        import mi_raft.catalog as catalog
+
+        table = (
+            "provider  model  context\n"
+            "nan       glm5.3  1M\n"
+            "minimax   MiniMax-M3  1M\n"
+        )
+        monkeypatch.setattr(catalog, "_run", lambda cmd, timeout=30: table)
+        out = catalog.pi_catalog()
+        assert {"provider": "nan", "model": "glm5.3"} in out
+        assert {"provider": "minimax", "model": "MiniMax-M3"} in out
+
+    def test_providers_and_models_for(self, monkeypatch):
+        import mi_raft.catalog as catalog
+
+        fake = {"opencode": [
+            {"provider": "nan", "model": "glm5.3"},
+            {"provider": "nan", "model": "gemma4"},
+            {"provider": "anthropic", "model": "claude-sonnet-4"},
+        ]}
+        assert catalog.providers_for("opencode", fake) == ["anthropic", "nan"]
+        assert catalog.models_for("opencode", "nan", fake) == ["glm5.3", "gemma4"]
+
+    def test_patch_validates_model_against_catalog(self, tmp_path, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from mi_raft import catalog as catalog_mod
+        from mi_raft.server import create_app
+
+        monkeypatch.setattr(
+            catalog_mod, "full_catalog",
+            lambda force=False: {"claude": [{"provider": "anthropic", "model": "claude-sonnet-4-5"}]},
+        )
+        cfg = make_config([AgentConfig(name="alpha", runtime="claude", work_dir="/tmp")])
+        cfg.server.db = str(tmp_path / "raft.db")
+        db = make_db(tmp_path, cfg.agents)
+        client = TestClient(create_app(cfg, db))
+        ok = client.patch("/agents/alpha", json={"provider": "anthropic", "model": "claude-sonnet-4-5"})
+        assert ok.status_code == 200
+        assert ok.json()["provider"] == "anthropic"
+        bad = client.patch("/agents/alpha", json={"model": "modelo-inventado"})
+        assert bad.status_code == 422
+        assert db.get_agent("alpha").model == "claude-sonnet-4-5"
+
+    def test_opencode_combines_provider_model(self):
+        from mi_raft.config import AgentConfig
+        from mi_raft.runtimes.opencode import OpencodeRuntime
+
+        agent = AgentConfig(name="a", runtime="opencode", work_dir="/tmp",
+                            provider="nan", model="glm5.3-flash")
+        args = OpencodeRuntime().build_args(agent, None)
+        assert args[args.index("-m") + 1] == "nan/glm5.3-flash"
+        combined = AgentConfig(name="b", runtime="opencode", work_dir="/tmp",
+                               provider="nan", model="nan/glm5.3-flash")
+        args2 = OpencodeRuntime().build_args(combined, None)
+        assert args2[args2.index("-m") + 1] == "nan/glm5.3-flash"

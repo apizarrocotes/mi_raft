@@ -13,8 +13,11 @@ class OpencodeRuntime(BaseRuntime):
         mode = agent.permissions.get("mode", "auto")
         if mode == "auto":
             args.append("--auto")
-        if agent.model:
-            args += ["-m", str(agent.model)]
+        model = agent.model
+        if model and agent.provider and "/" not in str(model):
+            model = f"{agent.provider}/{model}"
+        if model:
+            args += ["-m", str(model)]
         if session_id:
             args += ["-s", session_id]
         args += agent.extra_args

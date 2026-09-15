@@ -19,6 +19,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from .catalog import full_catalog, models_for, providers_for
 from .config import KNOWN_RUNTIMES, Config
 from .db import Database
 from .router import route_message
@@ -178,6 +179,7 @@ class AgentIn(BaseModel):
 class AgentPatchIn(BaseModel):
     instructions: str | None = None
     model: str | None = None
+    provider: str | None = None
     memory_file: str | None = None
     permissions: dict | None = None
 
@@ -498,6 +500,7 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
             "status": row["status"],
             "work_dir": row["work_dir"],
             "model": row["model"],
+            "provider": row["provider"] if "provider" in row.keys() else None,
             "instructions": row["instructions"],
             "permissions": json.loads(row["permissions_json"]),
             "memory_file": row["memory_file"],
@@ -510,6 +513,22 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
             "models_used": [dict(m) for m in db.agent_models(agent_id)],
             "stats": dict(stats),
             "recent_runs": [dict(r) for r in db.recent_runs(agent_id, limit=5)],
+        }
+
+    @app.get("/models", dependencies=[Depends(require_key)])
+    def models(runtime: str | None = None):
+        catalog = full_catalog()
+        if runtime:
+            if runtime not in catalog:
+                raise HTTPException(404, f"Runtime desconocido: {runtime}")
+            return {
+                "runtime": runtime,
+                "providers": providers_for(runtime, catalog),
+                "models": catalog[runtime],
+            }
+        return {
+            rt: {"providers": providers_for(rt, catalog), "models": ms}
+            for rt, ms in catalog.items()
         }
 
     @app.get("/meta")
@@ -715,7 +734,18 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
     def patch_agent(agent_id: str, body: AgentPatchIn):
         if db.get_agent_row(agent_id) is None:
             raise HTTPException(404, f"Agente {agent_id} no existe")
-        row = db.update_agent(agent_id, body.model_dump(exclude_none=True))
+        fields = body.model_dump(exclude_none=True)
+        from .catalog import model_exists
+
+        if "model" in fields and fields["model"]:
+            runtime_row = db.get_agent_row(agent_id)
+            if not model_exists(runtime_row["runtime"], fields.get("provider"), fields["model"]):
+                raise HTTPException(
+                    422,
+                    f"Modelo {fields['model']} no está en el catálogo de {runtime_row['runtime']} "
+                    "(consulta GET /models)",
+                )
+        row = db.update_agent(agent_id, fields)
         return dict(row)
 
     def workspace_root() -> Path:
