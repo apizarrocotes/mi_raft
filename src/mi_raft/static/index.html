@@ -547,9 +547,9 @@ async function showRunDetail(runId) {
         let detail = "";
         try {
           const p = JSON.parse(op.payload_json || "{}");
-          if (op.type === "tool_use") detail = `<code style="font-size:11px">${esc(JSON.stringify(p.input || p).slice(0, 160))}</code>`;
+          if (op.type === "tool_use") detail = `<code style="font-size:11px">${esc(p.summary || JSON.stringify(p.input || p).slice(0, 160))}</code>`;
+          else if (op.type === "tool_result") detail = esc((p.output || p.content || "").slice(0, 200));
           else if (op.type === "text") detail = esc((p.text || "").slice(0, 200));
-          else if (op.type === "tool_result") detail = esc((p.content || "").slice(0, 200));
           else detail = esc(p.event || "");
         } catch (e) { detail = esc(op.payload_json.slice(0, 120)); }
         return `

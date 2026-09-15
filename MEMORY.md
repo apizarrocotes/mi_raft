@@ -80,6 +80,13 @@
 - /tools/fetch bloquea localhost/loopback/link-local (SSRF) y devuelve texto plano (scripts/estilos fuera, cap 100KB).
 - Verificado E2E: opencode buscó la última versión de Python vía curl a /tools/search con su bash y citó fuentes correctas (3.14.7, agosto 2026).
 
+## 2026-09-15 — Incidente timeout + recuperación del pipeline (romanticas)
+- **Fallo**: trendwatcher (opencode) hizo 54 operaciones legítimas de research y chocó el timeout de 600s. Detección OK por diseño (run failed, agente error, system message). El pipeline quedó esperando (ningún run detrás).
+- **2 errores MÍOS que rompieron opencode**: (1) maté PIDs `opencode` a ciegas creyendo que eran huérfanos de mi_raft — uno era la **propia sesión del usuario** (se rompió varias veces); (2) maté un `opencode run` que era un run VIVO del server (#24, "código -9"). **Regla permanente**: antes de matar cualquier proceso, verificar ascendencia en /proc — solo matar si llega a un `miraft serve`; jamás `opencode` sueltos (la sesión del usuario es un `opencode` sin más). Mi sesión actual: ancestro de mis comandos bash.
+- **kill_tree mejorado** en BaseRuntime: killpg + barrido recursivo de descendientes vía /proc/*/stat (los nietos con setsid sobreviven al killpg). Comprometido.
+- **Patrón anti-timeout que funcionó**: turno incremental (máx 5 búsquedas, guardar informe parcial SIEMPRE, avisar en canal para continuar) + timeout_s 900 para research. El informe v1 quedó en mercado/ con fuentes y pendientes marcados, y el agente preguntó al humano una decisión de producto (¿español o bilingüe?).
+- pgrep en este host a veces cuelga el shell — inspeccionar procesos leyendo /proc directamente con python.
+
 ## 2026-09-15 — Equipo ejemplo: sello "Tinta Ardiente" (romance picante KDP)
 - `teams/romanticas/` — puerto 8504, key en su raft.yaml (local, gitignored). 7 agentes (onboarding + 6), 6 canales por lane, 12 aristas de org con la jefa-editorial como hub.
 - Pipeline diseñado: mercado (trendwatcher, opencode+web) → biblia → outline → borradores (novelista, opencode) → edición (editor-fino, claude) → beta (beta-lectora, claude) → paquete KDP (kdp-manager, claude). Escala de picante 1-5 objetivo 4 con límites KDP explícitos en instrucciones. Workspace: manuscrito/ (+ediciones/), biblia/, mercado/, publicacion/.

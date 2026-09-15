@@ -1277,3 +1277,31 @@ class TestWebTools:
         assert "bad()" not in r["text"]
         assert client.get("/tools/fetch", params={"url": "http://127.0.0.1/x"}).status_code == 400
         assert client.get("/tools/fetch", params={"url": "ftp://x.com"}).status_code == 422
+
+
+class TestOpencodeTelemetry:
+    def test_tool_events_are_readable(self):
+        from mi_raft.runtimes.opencode import OpencodeRuntime
+
+        rt = OpencodeRuntime()
+        events = []
+        lines = "\n".join([
+            json.dumps({"type": "step_start", "sessionID": "s", "part": {}}),
+            json.dumps({"type": "tool", "sessionID": "s", "part": {
+                "type": "tool", "tool": "bash", "callID": "c1",
+                "state": {"status": "completed", "input": {"command": "ls -la"}, "output": "hello.py"},
+            }}),
+            json.dumps({"type": "tool", "sessionID": "s", "part": {
+                "type": "tool", "tool": "write", "callID": "c2",
+                "state": {"status": "completed", "input": {"filePath": "manuscrito/cap01.md", "content": "x" * 2000}},
+            }}),
+        ])
+        for line in lines.splitlines():
+            rt.parse_line(line, events.append)
+        assert events[0]["type"] == "step"
+        bash_ev = events[1]
+        assert bash_ev["tool"] == "bash"
+        assert bash_ev["payload"]["summary"] == "$ ls -la"
+        assert bash_ev["payload"]["output"] == "hello.py"
+        write_ev = events[2]
+        assert write_ev["payload"]["summary"] == "manuscrito/cap01.md (2000 chars)"
