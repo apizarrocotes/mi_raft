@@ -282,7 +282,9 @@ def create_app(cfg: Config, db: Database) -> FastAPI:
 
     @app.get("/")
     def index():
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(
+            STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"}
+        )
 
     VENDOR_FILES = {"marked.min.js", "purify.min.js"}
 
