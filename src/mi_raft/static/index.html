@@ -1016,8 +1016,38 @@ async function boot() {
     openSSE();
   } catch (e) { refreshHealth(false); }
 }
+let ticking = false;
+async function tick() {
+  if (ticking) return;
+  ticking = true;
+  try {
+    try { const r = await fetch("/health"); refreshHealth(r.ok); } catch (e) { refreshHealth(false); }
+    if (!S.es || S.es.readyState === 2) openSSE();
+    try { S.agents = await api("/agents"); renderAgents(); } catch (e) {}
+    if (S.tab === "chat" && S.channel) {
+      try {
+        const msgs = await api(`/channels/${S.channel}/messages?limit=200`);
+        let changed = false;
+        for (const m of msgs) {
+          if (S.seen.has(m.id)) continue;
+          S.seen.add(m.id);
+          S.messages.push(m);
+          S.lastId = Math.max(S.lastId, m.id);
+          changed = true;
+        }
+        if (changed) render();
+      } catch (e) {}
+    } else if (S.tab === "tasks") {
+      renderTasks().catch(() => {});
+    } else if (S.tab === "activity" && !$("run-detail")?.innerHTML) {
+      renderActivity().catch(() => {});
+    }
+  } finally {
+    ticking = false;
+  }
+}
 boot();
-setInterval(() => { if (S.tab === "tasks") renderTasks().catch(() => {}); }, 5000);
+setInterval(tick, 5000);
 </script>
 </body>
 </html>

@@ -22,6 +22,7 @@ class AgentConfig:
     max_concurrent: int = 1
     timeout_s: int = 600
     memory_file: str | None = None
+    memory_max_chars: int = 24000
     server_port: int | None = None
     wake_url: str | None = None
     budget_usd: float | None = None
@@ -110,6 +111,7 @@ def load_config(path: str | Path) -> Config:
                 max_concurrent=int(item.get("max_concurrent", defaults.get("max_concurrent", 1))),
                 timeout_s=int(item.get("timeout_s", defaults.get("timeout_s", 600))),
                 memory_file=item.get("memory_file"),
+                memory_max_chars=int(item.get("memory_max_chars", defaults.get("memory_max_chars", 24000))),
                 server_port=item.get("server_port"),
                 wake_url=item.get("wake_url"),
                 budget_usd=item.get("budget_usd"),

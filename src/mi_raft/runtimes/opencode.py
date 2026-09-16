@@ -63,19 +63,20 @@ class OpencodeRuntime(BaseRuntime):
                     finish_reason = part["reason"]
                 tokens = part.get("tokens") or {}
                 if isinstance(tokens.get("input"), (int, float)):
-                    tokens_in = int(tokens["input"])
+                    tokens_in = (tokens_in or 0) + int(tokens["input"])
                 if isinstance(tokens.get("output"), (int, float)):
-                    tokens_out = int(tokens["output"])
+                    tokens_out = (tokens_out or 0) + int(tokens["output"])
                 if isinstance(part.get("cost"), (int, float)):
-                    cost_usd = float(part["cost"])
+                    cost_usd = (cost_usd or 0.0) + float(part["cost"])
         text = "\n\n".join(t for t in texts if t.strip()).strip()
+        if finish_reason == "length":
+            partial = f" Texto parcial: {text[:800]}" if text else ""
+            raise RuntimeError(
+                "opencode agotó el límite de tokens de salida del modelo (razón=length)."
+                f"{partial} El trabajo parcial escrito por tools queda guardado en el "
+                "workspace; continúa en otro turno o reparte el trabajo en trozos menores"
+            )
         if not text:
-            if finish_reason == "length":
-                raise RuntimeError(
-                    "opencode agotó el límite de tokens de salida del modelo (razón=length). "
-                    "El trabajo parcial escrito por tools queda guardado en el workspace; "
-                    "continúa en otro turno o reparte el trabajo en trozos menores"
-                )
             raise RuntimeError(
                 f"opencode no devolvió texto (razón={finish_reason or 'desconocida'})"
             )

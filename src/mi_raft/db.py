@@ -123,7 +123,7 @@ CREATE INDEX IF NOT EXISTS idx_run_message ON run_message(run_id, seq);
 
 AGENT_COLUMNS = (
     "id, runtime, work_dir, instructions, model, provider, permissions_json, "
-    "extra_args_json, max_concurrent, timeout_s, memory_file, server_port, wake_url, budget_usd, sandbox_json, web_search"
+    "extra_args_json, max_concurrent, timeout_s, memory_file, server_port, wake_url, budget_usd, sandbox_json, web_search, memory_max_chars"
 )
 
 MIGRATIONS = (
@@ -142,6 +142,7 @@ MIGRATIONS = (
     "ALTER TABLE run ADD COLUMN provider TEXT",
     "ALTER TABLE run ADD COLUMN model TEXT",
     "ALTER TABLE agent ADD COLUMN provider TEXT",
+    "ALTER TABLE agent ADD COLUMN memory_max_chars INTEGER NOT NULL DEFAULT 24000",
 )
 
 class Database:
@@ -248,7 +249,7 @@ class Database:
     @staticmethod
     def _upsert_agent(conn: sqlite3.Connection, a: AgentConfig) -> None:
         conn.execute(
-            f"INSERT OR REPLACE INTO agent ({AGENT_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT OR REPLACE INTO agent ({AGENT_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 a.name,
                 a.runtime,
@@ -266,6 +267,7 @@ class Database:
                 a.budget_usd,
                 json.dumps(a.sandbox),
                 1 if a.web_search else 0,
+                a.memory_max_chars,
             ),
         )
 
@@ -340,6 +342,9 @@ class Database:
             max_concurrent=row["max_concurrent"],
             timeout_s=row["timeout_s"],
             memory_file=row["memory_file"],
+            memory_max_chars=(
+                row["memory_max_chars"] if "memory_max_chars" in row.keys() else 24000
+            ),
             server_port=row["server_port"],
             wake_url=row["wake_url"],
             budget_usd=row["budget_usd"],
@@ -523,6 +528,11 @@ class Database:
                   WHERE r.status='queued'
                     AND (SELECT COUNT(*) FROM run r2
                          WHERE r2.agent_id=r.agent_id AND r2.status='running') < a.max_concurrent
+                    AND NOT EXISTS (
+                      SELECT 1 FROM run r3
+                      WHERE r3.agent_id=r.agent_id AND r3.thread_id=r.thread_id
+                        AND r3.status='running'
+                    )
                     AND NOT EXISTS (
                       SELECT 1 FROM task t
                       WHERE t.thread_id = r.thread_id

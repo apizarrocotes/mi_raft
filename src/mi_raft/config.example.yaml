@@ -16,6 +16,8 @@ defaults:
 # en un agente: web_search: false
 
 # Por agente (opcionales):
+#   memory_max_chars: 24000  # tope de memoria inyectada en el prompt (el fichero
+#                            # completo sigue en disco y el agente puede leerlo)
 #   budget_usd: 0.50        # límite de gasto por turno (claude: --max-budget-usd)
 #   sandbox:
 #     enable: true          # ejecuta el CLI dentro de bwrap (si está instalado)

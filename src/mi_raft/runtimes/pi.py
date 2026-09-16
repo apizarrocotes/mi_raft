@@ -54,12 +54,15 @@ class PiRuntime(BaseRuntime):
 
         answer = None
         cost_usd = tokens_in = tokens_out = None
+        provider_error = None
         for ev in events:
             if ev.get("type") != "message_end":
                 continue
             msg = ev.get("message") or {}
             if msg.get("role") != "assistant":
                 continue
+            if msg.get("stopReason") == "error":
+                provider_error = msg.get("errorMessage") or provider_error
             blocks = msg.get("content") or []
             texts = [
                 b.get("text")
@@ -69,10 +72,16 @@ class PiRuntime(BaseRuntime):
             if texts:
                 answer = "\n".join(texts)
             usage = msg.get("usage") or {}
+            base_in = None
             for k_in in ("input_tokens", "input", "prompt_tokens"):
                 if isinstance(usage.get(k_in), (int, float)):
-                    tokens_in = int(usage[k_in])
+                    base_in = int(usage[k_in])
                     break
+            if base_in is not None:
+                for k_cache in ("cacheRead", "cache_read", "cacheWrite", "cache_write"):
+                    if isinstance(usage.get(k_cache), (int, float)):
+                        base_in += int(usage[k_cache])
+                tokens_in = base_in
             for k_out in ("output_tokens", "output", "completion_tokens"):
                 if isinstance(usage.get(k_out), (int, float)):
                     tokens_out = int(usage[k_out])
@@ -82,6 +91,12 @@ class PiRuntime(BaseRuntime):
             elif isinstance(usage.get("cost"), (int, float)):
                 cost_usd = float(usage["cost"])
         if not answer:
+            if provider_error:
+                raise RuntimeError(
+                    f"pi: el proveedor rechazó la petición ({provider_error}). "
+                    "Suele ser exceso de contexto: reintenta el run (pi compacta la sesión) "
+                    "o reduce la memoria/hilo inyectados"
+                )
             raise RuntimeError(f"pi no devolvió respuesta de asistente: {stdout[:500]}")
         provider = None
         model = None

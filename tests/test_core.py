@@ -151,6 +151,24 @@ class TestRouting:
         db.finish_run(first["id"], "done", None, None, "ok", None)
         assert db.claim_next_run() is not None
 
+    def test_claim_serializes_same_agent_thread(self, tmp_path):
+        db = Database(tmp_path / "raft.db")
+        db.sync_config(
+            make_config(
+                [AgentConfig(name="alpha", runtime="claude", work_dir="/tmp", max_concurrent=3)]
+            )
+        )
+        a = db.insert_run("alpha", "demo", 1, 1)
+        b = db.insert_run("alpha", "demo", 1, 1)
+        c = db.insert_run("alpha", "demo", 2, 2)
+        first = db.claim_next_run()
+        second = db.claim_next_run()
+        assert {first["id"], second["id"]} == {a, c}   # hilos distintos en paralelo
+        assert db.claim_next_run() is None             # b espera: mismo hilo que a (running)
+        db.finish_run(a, "done", None, None, "ok", None)
+        third = db.claim_next_run()
+        assert third["id"] == b
+
 
 class FakeHandoffRuntime(BaseRuntime):
     name = "fakehandoff"
@@ -269,6 +287,24 @@ class TestMemory:
         root = db.insert_message("demo", "human", "apc", "@alpha hola")
         prompt = build_prompt(db, db.get_agent("alpha"), "demo", root)
         assert "vacía todavía" in prompt
+
+    def test_prompt_truncates_oversized_memory(self, tmp_path):
+        mem = tmp_path / "memoria.md"
+        mem.write_text("INICIO\n" + "x" * 5000 + "\nFINAL")
+        db = Database(tmp_path / "raft.db")
+        db.sync_config(
+            make_config(
+                [AgentConfig(
+                    name="alpha", runtime="claude", work_dir="/tmp",
+                    memory_file=str(mem), memory_max_chars=2000,
+                )]
+            )
+        )
+        root = db.insert_message("demo", "human", "apc", "@alpha hola")
+        prompt = build_prompt(db, db.get_agent("alpha"), "demo", root)
+        assert "memoria truncada" in prompt
+        assert "INICIO" in prompt and "FINAL" in prompt
+        assert "x" * 3000 not in prompt
 
 
 from mi_raft.runtimes.opencode_serve import OpencodeServeRuntime, derive_port
@@ -742,6 +778,32 @@ class TestUsage:
         r = PiRuntime().parse_output(lines)
         assert r.session_id == "pi1"
         assert r.tokens_in == 900 and r.tokens_out == 10 and r.cost_usd == 0.002
+
+    def test_pi_parse_stream_usage_shape(self):
+        from mi_raft.runtimes.pi import PiRuntime
+
+        lines = json.dumps({"type": "message_end", "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "ok"}],
+            "usage": {"input": 933, "output": 137, "cacheRead": 100,
+                      "cacheWrite": 20, "reasoning": 128, "totalTokens": 1190},
+        }})
+        r = PiRuntime().parse_output(lines)
+        assert r.tokens_in == 1053 and r.tokens_out == 137
+
+    def test_pi_provider_error_is_surfaced(self):
+        from mi_raft.runtimes.pi import PiRuntime
+
+        lines = "\n".join([
+            json.dumps({"type": "session", "session": {"id": "pi1"}}),
+            json.dumps({"type": "message_end", "message": {
+                "role": "assistant", "content": [], "stopReason": "error",
+                "errorMessage": "400: Invalid request.",
+            }}),
+            json.dumps({"type": "turn_end"}),
+        ])
+        with pytest.raises(RuntimeError, match="proveedor rechazó"):
+            PiRuntime().parse_output(lines)
 
     def test_usage_endpoint(self, tmp_path):
         from fastapi.testclient import TestClient
@@ -1568,15 +1630,30 @@ class TestOpencodeLength:
         with pytest.raises(RuntimeError, match="límite de tokens"):
             OpencodeRuntime().parse_output(lines)
 
-    def test_length_with_text_returns_partial(self):
+    def test_length_with_text_still_errors(self):
         from mi_raft.runtimes.opencode import OpencodeRuntime
 
         lines = "\n".join([
             json.dumps({"type": "text", "sessionID": "s", "part": {"text": "voy por la mitad"}}),
             json.dumps({"type": "step_finish", "sessionID": "s", "part": {"reason": "length"}}),
         ])
+        with pytest.raises(RuntimeError, match="límite de tokens") as exc:
+            OpencodeRuntime().parse_output(lines)
+        assert "voy por la mitad" in str(exc.value)
+
+    def test_opencode_accumulates_tokens_across_steps(self):
+        from mi_raft.runtimes.opencode import OpencodeRuntime
+
+        lines = "\n".join([
+            json.dumps({"type": "step_finish", "sessionID": "s",
+                        "part": {"reason": "tool-calls", "tokens": {"input": 100, "output": 10}, "cost": 0.001}}),
+            json.dumps({"type": "text", "sessionID": "s", "part": {"text": "ok"}}),
+            json.dumps({"type": "step_finish", "sessionID": "s",
+                        "part": {"reason": "stop", "tokens": {"input": 50, "output": 5}, "cost": 0.002}}),
+        ])
         r = OpencodeRuntime().parse_output(lines)
-        assert r.text == "voy por la mitad"
+        assert r.tokens_in == 150 and r.tokens_out == 15
+        assert abs(r.cost_usd - 0.003) < 1e-9
 
 
 class TestSupervisorBypass:

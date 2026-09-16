@@ -13,6 +13,27 @@ MAX_AGENT_REPLIES_PER_THREAD = 20
 MAX_ESCALATIONS_PER_THREAD = 3
 
 
+def _truncate_memory(content: str, limit: int, path: Path) -> str:
+    """Recorta la memoria inyectada en el prompt (el fichero completo sigue en disco).
+
+    Conserva el inicio (doctrina/estructura) y el final (estado reciente), que es
+    donde vive lo importante; deja un aviso en medio pidiendo consolidarla.
+    """
+    if not limit or len(content) <= limit:
+        return content
+    notice = (
+        f"\n\n[... memoria truncada: {len(content) - limit} de {len(content)} caracteres "
+        f"omitidos. La memoria completa está en {path}: léela con tus tools y consolídala "
+        "en este turno, resumiendo lo obsoleto para que quepa entera ...]\n\n"
+    )
+    budget = limit - len(notice)
+    if budget <= 0:
+        return notice
+    head = budget // 3
+    tail = budget - head
+    return content[:head] + notice + content[-tail:]
+
+
 def escalate(db: Database, channel_id: str, thread_id: int, text: str) -> None:
     """Publica una escalación al supervisor (con @mención si procede) y la enruta."""
     supervisor = db.escalate_to
@@ -150,6 +171,7 @@ def build_prompt(db, agent, channel_id: str, thread_id: int) -> str:
     if agent.memory_file:
         mem_path = Path(agent.memory_file).expanduser()
         content = mem_path.read_text() if mem_path.exists() else "(vacía todavía)"
+        content = _truncate_memory(content, getattr(agent, "memory_max_chars", 0), mem_path)
         header += (
             f"\n\nMemoria persistente — fichero: {mem_path}\n"
             f"Contenido actual:\n{content}\n"
