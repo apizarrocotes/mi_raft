@@ -95,6 +95,12 @@
 - **Bug de LIKE mordido**: las escalaciones empiezan con @mención (texto = "@jefa ⚠️...") → `text LIKE '⚠️%'` no matcheaba nunca y el contador anti-bucle no contaba. Fix: escalate() normaliza el formato (⚠️ siempre primero, luego mención). Lección: cuando un formato de mensaje es contracto (prefijo buscable), construirlo en UN solo sitio (escalate), nunca en los callers.
 - El supervisor sigue siendo quien decide (reintentar, reasignar, cerrar) — control de loop cerrado, no autonomía infinita. Cron/autopilots siguen excluidos.
 
+## 2026-09-15 — Diseño org refinado (corrección del usuario)
+- **Modelo definitivo del hub**: la jefa delega SOLO a los heads de lane (novelista-lead, editor-fino, trendwatcher, kdp-manager, beta-lectora) — NO directamente a las escritoras. La escritura se reparte vía lead. La lista de delegación define los lanes normales.
+- **Bypass de supervisor (código)**: `escalate_to` nunca se le bloquea un handoff (route_message) — es la vía de EMERGENCIA (escalaciones de fallos, micro-fixes urgentes), distinta de la delegación normal. Test: supervisor menciona sin arista → run creado; agente normal sin arista → bloqueado.
+- **Edición en vivo del org**: las aristas viven en la tabla org_edge (reconstruidas del yaml SOLO en boot) — se pueden editar por SQL sin reinicio y el route_message las lee en vivo. El yaml es el source of truth para el próximo boot.
+- Incidente que lo destapó: la jefa mencionó a novelista-a/b directamente (micro-fix L64) → bloqueado 2 veces → ella misma lo diagnosticó ("lane muda, probable flag interno del runner post-pausa") — modelo mental erróneo; el M1 prompt injection evita que los agentes inventen teorías de infraestructura.
+
 ## 2026-09-15 — Catálogo de proveedores/modelos (petición: CLI + proveedor + LLM configurables)
 - **Los CLIs exponen su catálogo**: `opencode models` (69 combos "provider/model"), `pi --list-models` (tabla provider/model/context), claude NO tiene listado (lista curada de Anthropic en catalog.py). catalog.py los llama con caché TTL 300s.
 - **agents.provider** (columna + YAML + PATCH): opencode combina provider/model en `-m provider/model` (si model no trae "/"); pi usa `--provider` + `--model` separados; claude ignora provider (solo anthropic). PATCH valida el modelo contra el catálogo (422 si no existe).

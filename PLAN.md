@@ -1,9 +1,10 @@
 # PLAN — mi_raft
 
 ## Current State
-- **Activo ahora**: Sprints 1-3 del BACKLOG completados y publicados (noche 2026-09-14/15). 53 tests, instancias principal+beta en vivo.
-- **Bloqueado**: sandboxing real inactivo en esta máquina (bwrap no instalado y sudo requiere contraseña) — el código está listo, solo `sudo apt install bubblewrap`.
-- **Siguiente paso**: del backlog — CI real (token con scope workflow), telemetría de ejecución (run messages), push notifications (etapa 2), multi-máquina.
+- **Activo ahora**: post-F5 — sprints 1-3, telemetría, herramientas web, control de proceso (escalación/watchdog) y M1-M6 están hechos y operativos. 77 tests. Equipo ejemplo `romanticas` (sello KDP) en vivo en :8504.
+- **Bloqueado**: sandboxing real inactivo en esta máquina (bwrap no instalado y sudo requiere contraseña) — el código está listo, solo `sudo apt install bubblewrap`. CI real pendiente de token gh con scope `workflow`.
+- **Siguiente paso**: del backlog — push notifications (etapa 2), runner concurrente ya activo, membresía por canal si el coste del equipo sigue alto, multi-máquina (daemon).
+- **PLAN al día**: F0-F5 abajo + F6-F9 con el trabajo posterior. Detalle de decisiones/incidentes en MEMORY.md.
 
 ## F0 — Investigación ✅ (2026-09-14)
 - [x] Referencias estudiadas (multica, raft-external-agents, omnigent); headless de los 3 CLIs verificado.
@@ -88,6 +89,36 @@ Tareas:
 - [x] 30 tests
 - [x] Fixes: --config en subcomandos (argparse.SUPPRESS), prog=miraft, asignador de puertos con bind real
 
-## F6 — Futuro (explícitamente aplazado)
-- Daemon multi-máquina, notificaciones (inbox/pings), sandboxing fuerte (bwrap/landlock).
-- UI: edición de agentes (PATCH ya existe), kanban de tasks, archivo histórico.
+## Sprints 1-3 del BACKLOG ✅ (noche 2026-09-14/15)
+- **S1**: costes/tokens capturados de los 3 runtimes (columnas en run + GET /usage + panel Equipo); `budget_usd` por agente (claude `--max-budget-usd`); estados reales de agente (idle/working/error); markdown con marked+DOMPurify vendored (sin build step); editar agentes en UI; CI como `docs/ci.yml.example` (falta token gh con scope `workflow`).
+- **S2**: búsqueda FTS5 (unicode61 sin diacríticos, trigger + backfill); /search + `miraft search` + overlay ⌘K; Activity (type=status); no-leídos + toasts + Notification API con mute; DMs (`channel.type=dm`, id `dm-<agente>`).
+- **S3**: tasks v2 (rebuild de tabla por CHECK: detectar sql viejo → task_v2; subtasks con `parent_task_id`; desglose por agente); runner concurrente (4-6 inflight); sandbox bwrap (perfil conservador, listo pero inactivo sin bwrap).
+- 77 tests. Lección reforzada: modelos Pydantic siempre a nivel de módulo (mordida nº 3).
+
+## F6 — Telemetría de ejecución + herramientas web ✅ (2026-09-15)
+- **run_message**: streaming de stdout por línea (pump con `asyncio.timeout`, stdin/stderr concurrentes); claude `--output-format stream-json --verbose`; parseo defensivo en opencode/pi/serve; sink con seq por run. Vista Actividad (runs por agente + timeline de operaciones); `miraft runs` / `miraft run <id>`.
+- **Herramientas web propias**: `/tools/search` (DDG lite + fallback + caché) y `/tools/fetch` (anti-SSRF, texto plano, cap 100KB), abiertos sin auth para curl de agentes e inyectados en el prompt de todos los runtimes locales. Resuelve la desigualdad de tools nativas entre CLIs.
+- Fix crítico: límite de 64KB por línea en StreamReader → `limit=64MB` (los JSON gigantes rompían TODOS los agentes).
+
+## F7 — Control de proceso ✅ (2026-09-15)
+- **Escalación a supervisor** (`escalate_to`): fallos de run, handoffs bloqueados y runs atascados publican mensaje al supervisor y se enrutan como runs. Guardias: sin auto-escalación, máx 3 por hilo.
+- **Watchdog** (cada 60s) termina runs colgados (timeout + gracia) y escala.
+- **Bypass de supervisor**: `escalate_to` nunca se le bloquea un handoff (vía de emergencia); la delegación normal sí respeta el org.
+- **kill_tree** recursivo vía `/proc` (los nietos con setsid sobreviven a killpg).
+
+## F8 — Org refinado + M1-M6 ✅ (2026-09-15)
+- **M1**: grafo de comunicación inyectado en el prompt (delega/reporta/fuera de líneas/no-acuses).
+- **M3**: continuidad de hilo solo en DMs — en canales multi-agente, solo las menciones despiertan.
+- **M4**: `task_deps` + claim que salta hilos con tasks bloqueadas. **M5**: `phase` en tasks.
+- **M6**: editor-fino/beta-lectora/kdp-manager → pi + nan/deepseek-v4-flash (384K salida, 1M contexto; elimina `reason=length`).
+- **Catálogo de proveedores/modelos**: `providers.provider` por agente + `GET /models` (caché 300s, ejecuta los CLIs) + validación en PATCH.
+- Auditoría previa: 34/49 eventos eran handoffs bloqueados; ack-storms = ~80% del coste → M1-M6 atacan comunicación, precedencia y stale snapshots.
+
+## F9 — Equipo ejemplo `romanticas` ✅ (2026-09-15)
+- `teams/romanticas/` (:8504): 7 agentes, 6 canales por lane, 14 aristas con la jefa-editorial como hub. Pipeline: mercado → biblia → outline → borradores → edición → beta → paquete KDP.
+- **Lección org confirmada**: todo lane necesita arista de retorno al hub (los reportes de estado fluyen por canales; las aristas son para handoffs de trabajo).
+
+## F10 — Futuro (explícitamente aplazado)
+- Daemon multi-máquina, push notifications reales (service worker + VAPID), membresía por canal (si el coste sigue alto).
+- Sandboxing fuerte real (bwrap/landlock) — código listo, falta instalar bwrap.
+- UI: kanban drag&drop, archivo histórico, PWA móvil.
